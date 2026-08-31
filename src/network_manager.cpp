@@ -100,7 +100,9 @@ String setupPage(const String &message = String()) {
   h += F("<fieldset><legend><b>Wi-Fi</b></legend>");
   if(!options.isEmpty()) { h += F("<label>Reti rilevate</label><select name='scan' onchange=\"if(this.value)document.getElementsByName('ssid')[0].value=this.value\"><option value=''>-- seleziona --</option>"); h += options; h += F("</select>"); }
   h += F("<label>SSID</label><input name='ssid' maxlength='32' required value='"); h += htmlEscape(runtimeConfig.wifiSsid); h += F("'>");
-  h += F("<label>Password Wi-Fi</label><input name='pass' type='password' maxlength='63' value='"); h += htmlEscape(runtimeConfig.wifiPassword); h += F("'><small>Lascia vuoto solo per reti realmente aperte.</small>");
+  // Never send the stored credential back to the browser/DOM.
+  h += F("<label>Password Wi-Fi</label><input name='pass' type='password' maxlength='63' value=''><small>La password salvata non viene mai mostrata. Lascia vuoto per mantenerla se l'SSID non cambia.</small>");
+  h += F("<label><input type='checkbox' name='clearpass' value='1'> Cancella password / rete Wi-Fi aperta</label>");
   h += F("<label>Hostname</label><input name='host' maxlength='31' value='"); h += htmlEscape(runtimeConfig.hostname); h += F("'>");
   h += F("</fieldset>");
 
@@ -132,8 +134,16 @@ void configurePortalRoutes() {
     const String ssid = portal.arg("ssid");
     if(ssid.isEmpty()) { portal.send(400, "text/html; charset=utf-8", setupPage("SSID obbligatorio.")); return; }
 
+    const String previousSsid = runtimeConfig.wifiSsid;
+    const String submittedPassword = portal.arg("pass");
+    const bool clearPassword = portal.hasArg("clearpass");
+
     runtimeConfig.wifiSsid = ssid;
-    runtimeConfig.wifiPassword = portal.arg("pass");
+    if(clearPassword) runtimeConfig.wifiPassword = "";
+    else if(!submittedPassword.isEmpty()) runtimeConfig.wifiPassword = submittedPassword;
+    else if(ssid != previousSsid) runtimeConfig.wifiPassword = "";
+    // Same SSID + blank field keeps the credential already present in RAM/NVS.
+
     runtimeConfig.hostname = portal.arg("host");
     if(runtimeConfig.hostname.isEmpty()) runtimeConfig.hostname = DEVICE_HOSTNAME_DEFAULT;
     runtimeConfig.useDhcp = portal.hasArg("dhcp");
@@ -191,7 +201,7 @@ void startNetworkProvisioning(bool manual) {
   Serial.println(F("[NET] Modalita provisioning attiva"));
   Serial.print(F("[NET] SSID AP: ")); Serial.println(apSsid);
   Serial.println(F("[NET] Portale: http://192.168.4.1"));
-  if(apPass.length() >= 8) { Serial.print(F("[NET] Password AP: ")); Serial.println(apPass); }
+  if(apPass.length() >= 8) Serial.println(F("[NET] AP provisioning protetto"));
 }
 
 void stopNetworkProvisioning() {

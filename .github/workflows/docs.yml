@@ -9,14 +9,11 @@ on:
       - '.github/workflows/docs.yml'
   pull_request:
     branches: [ main, develop ]
-    paths:
-      - 'docs/RF_PROTOCOL_*.md'
-      - 'tools/build_protocol_pdfs.py'
-      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 # Canonical generated artifacts: bilingual RF PDFs plus GNU license texts.
-# Keep generated files synchronized on develop before promotion to main.
+# The PR job always runs so it can be configured as a required status check.
+# Generated artifacts are committed only on develop.
 permissions:
   contents: write
 
@@ -39,10 +36,15 @@ jobs:
         run: |
           curl -fsSL https://www.gnu.org/licenses/lgpl-3.0.txt -o LICENSE
           curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt -o COPYING
-      - name: Commit generated documentation
+      - name: Verify generated documentation on pull requests
+        if: github.event_name == 'pull_request'
+        run: |
+          test -s docs/Davis_RF_Protocol_Guide_IT_v1.0.pdf
+          test -s docs/Davis_RF_Protocol_Guide_EN_v1.0.pdf
+      - name: Commit generated documentation and license texts
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
         run: |
-          if git diff --quiet -- docs/*.pdf LICENSE COPYING 2>/dev/null; then
+          if [ -z "$(git status --porcelain --untracked-files=all -- docs/*.pdf LICENSE COPYING)" ]; then
             echo "Generated files already up to date."
             exit 0
           fi

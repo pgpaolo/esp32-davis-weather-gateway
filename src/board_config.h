@@ -13,6 +13,9 @@
 #define RADIO_DIO1_PIN      33
 #define BOARD_LED_PIN       37
 #define BOARD_LED_ON        HIGH
+#define PROVISION_BUTTON_ENABLE 1
+#define PROVISION_BUTTON_PIN    0
+#define PROVISION_BUTTON_ACTIVE LOW
 #else
 #define BOARD_NAME          "LILYGO T3 V1.6.1 SX1276 868"
 #define I2C_SDA_PIN         21
@@ -26,5 +29,10 @@
 #define RADIO_DIO1_PIN      33
 #define BOARD_LED_PIN       25
 #define BOARD_LED_ON        HIGH
+// The V1.6.1 profile does not assume a safe application BOOT button mapping.
+// Recovery remains automatic: failed/no Wi-Fi configuration starts the AP.
+#define PROVISION_BUTTON_ENABLE 0
+#define PROVISION_BUTTON_PIN    0
+#define PROVISION_BUTTON_ACTIVE LOW
 #endif
 #define BOARD_LED_OFF       (!BOARD_LED_ON)

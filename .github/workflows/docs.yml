@@ -1,0 +1,51 @@
+name: Build documentation
+
+on:
+  push:
+    branches: [ develop ]
+    paths:
+      - 'docs/RF_PROTOCOL_*.md'
+      - 'tools/build_protocol_pdfs.py'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'docs/RF_PROTOCOL_*.md'
+      - 'tools/build_protocol_pdfs.py'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install documentation dependencies
+        run: pip install reportlab
+      - name: Generate protocol PDFs
+        run: python tools/build_protocol_pdfs.py
+      - name: Install canonical GNU license texts
+        if: github.event_name != 'pull_request'
+        run: |
+          curl -fsSL https://www.gnu.org/licenses/lgpl-3.0.txt -o LICENSE
+          curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt -o COPYING
+      - name: Commit generated documentation
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+        run: |
+          if git diff --quiet -- docs/*.pdf LICENSE COPYING 2>/dev/null; then
+            echo "Generated files already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/*.pdf LICENSE COPYING
+          git commit -m "Build protocol PDFs and license texts"
+          git push origin HEAD:develop

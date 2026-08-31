@@ -9,7 +9,7 @@ Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis 
 
 Il progetto riceve la Davis ISS via **868 MHz FHSS**, decodifica i dati meteo, completa la pressione con un **BME280 locale**, offre configurazione e diagnostica web e può inviare un record compatibile Meteobridge/Weather34 a un endpoint HTTP configurabile dall'utente.
 
-> `develop` è il branch di integrazione attivo. `main` è destinato a contenere stati del progetto revisionati e validati dalla CI.
+> `develop` è il branch di integrazione attivo. `main` contiene stati del progetto revisionati e validati dalla CI.
 
 ## Stato del progetto
 
@@ -44,6 +44,10 @@ Dal gateway:
 - pressione atmosferica BME280 ridotta al livello del mare
 - temperatura/umidità locale BME280
 
+### Nota sulla pressione Davis
+
+Per la **Vantage Pro2 Sensor Suite 6322/6322M** la pressione barometrica non fa parte dei sensori dell'ISS esterna e non viene ricavata dal frame RF ISS. Nell'ecosistema Davis il barometro è sul lato ricevente: WeatherLink Live e Weather Envoy includono un barometro locale insieme ai sensori T/H interni. Il gateway segue la stessa architettura usando il BME280 locale. La distinzione è documentata nella guida RF Edizione 1.1.
+
 ## RF Davis EU
 
 Il ricevitore usa 2-FSK a 19.2 kbps, deviazione 4.8 kHz, shaping Gaussian BT=0.5, sync `CB 89` e pacchetto fisso di 10 byte con CRC16-CCITT Davis verificato in software.
@@ -68,7 +72,7 @@ Al primo avvio, o quando non esiste una configurazione valida, il gateway crea u
 DavisGateway-XXXX
 ```
 
-Per impostazione predefinita l'AP di setup è aperto perché temporaneo; può essere protetto definendo `PROVISION_AP_PASSWORD` in un file di configurazione privato.
+Per impostazione predefinita l'AP di setup è aperto perché temporaneo; può essere protetto definendo `PROVISION_AP_PASSWORD` in un file di configurazione privato. In ambienti non fidati è raccomandato impostare una password di almeno 8 caratteri.
 
 Il captive portal è disponibile su:
 
@@ -105,7 +109,7 @@ Il gateway aggiunge:
 
 Un invio è considerato riuscito solo con risposta HTTP `200` e corpo `success`.
 
-La dashboard offre configurazione URL receiver, intervallo upload, test manuale dell'invio, anteprima del record generato e scelta modalità TLS.
+La dashboard offre configurazione URL receiver, intervallo upload, test manuale dell'invio, anteprima del record generato e scelta modalità TLS. La verifica del certificato HTTPS è il default; la modalità TLS insicura deve essere abilitata esplicitamente dall'installatore quando non è disponibile una CA configurata.
 
 ## Configurazione Davis e BME280
 
@@ -129,6 +133,8 @@ A rete operativa:
 - **TEST UPLOAD** dalla pagina configurazione
 - **RESET RETE / PORTALE SETUP** per cancellare solo la configurazione Wi-Fi
 
+La Web UI è progettata per una LAN fidata e non deve essere esposta direttamente su Internet senza un livello di autenticazione/proxy aggiuntivo.
+
 ## Build PlatformIO
 
 ```bash
@@ -136,12 +142,12 @@ pio run -e t3-v161-868
 pio run -e t3-s3-868
 ```
 
-GitHub Actions compila entrambi i target su `main` e `develop`.
+GitHub Actions compila entrambi i target su `main` e `develop`. Le versioni PlatformIO, piattaforma Espressif32 e librerie esterne sono bloccate a revisioni validate dalla CI per rendere le build riproducibili.
 
 ## Documentazione protocollo
 
-- [Guida RF Davis - PDF italiano](docs/Davis_RF_Protocol_Guide_IT_v1.0.pdf)
-- [Davis RF protocol guide - English PDF](docs/Davis_RF_Protocol_Guide_EN_v1.0.pdf)
+- [Guida RF Davis - PDF italiano v1.1](docs/Davis_RF_Protocol_Guide_IT_v1.1.pdf)
+- [Davis RF protocol guide - English PDF v1.1](docs/Davis_RF_Protocol_Guide_EN_v1.1.pdf)
 - [Note protocollo RF - Italiano](docs/RF_PROTOCOL_IT.md)
 - [RF protocol notes - English](docs/RF_PROTOCOL_EN.md)
 
@@ -150,6 +156,10 @@ La documentazione è tecnica e indipendente, basata sull'implementazione del fir
 ## Branch e contributi
 
 Vedere [CONTRIBUTING.md](CONTRIBUTING.md). Lo sviluppo ordinario parte da `develop`; la promozione a `main` avviene tramite pull request dopo revisione e CI verde.
+
+## Sicurezza
+
+Vedere [SECURITY.md](SECURITY.md). Il repository pubblico non deve contenere credenziali, certificati privati, token o endpoint specifici dell'installazione.
 
 ## Riferimenti e terze parti
 

@@ -17,8 +17,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatte
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 PAIRS = [
-    (DOCS / "RF_PROTOCOL_IT.md", DOCS / "Davis_RF_Protocol_Guide_IT_v1.0.pdf", "Guida alle codifiche RF Davis Vantage Pro2 / Pro2 Plus EU - 868 MHz", "Edizione 1.0 - 31 agosto 2026"),
-    (DOCS / "RF_PROTOCOL_EN.md", DOCS / "Davis_RF_Protocol_Guide_EN_v1.0.pdf", "Davis RF Encoding Guide - Vantage Pro2 / Pro2 Plus EU - 868 MHz", "Edition 1.0 - 31 August 2026"),
+    (DOCS / "RF_PROTOCOL_IT.md", DOCS / "Davis_RF_Protocol_Guide_IT_v1.1.pdf", "Guida alle codifiche RF Davis Vantage Pro2 / Pro2 Plus EU - 868 MHz", "Edizione 1.1 - 31 agosto 2026"),
+    (DOCS / "RF_PROTOCOL_EN.md", DOCS / "Davis_RF_Protocol_Guide_EN_v1.1.pdf", "Davis RF Encoding Guide - Vantage Pro2 / Pro2 Plus EU - 868 MHz", "Edition 1.1 - 31 August 2026"),
 ]
 
 styles = getSampleStyleSheet()

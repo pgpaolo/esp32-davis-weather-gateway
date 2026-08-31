@@ -72,7 +72,9 @@
 #define MB_UPLOAD_INTERVAL_MS 10000UL
 #endif
 #ifndef MB_TLS_INSECURE_DEFAULT
-#define MB_TLS_INSECURE_DEFAULT 1
+// Secure by default. Insecure TLS must be enabled explicitly by the installer
+// when a trusted CA certificate is not configured.
+#define MB_TLS_INSECURE_DEFAULT 0
 #endif
 #ifndef MB_ROOT_CA
 #define MB_ROOT_CA ""

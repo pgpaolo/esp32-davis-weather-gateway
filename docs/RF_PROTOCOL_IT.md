@@ -1,6 +1,6 @@
 # Note tecniche protocollo RF Davis Vantage Pro2 / Pro2 Plus EU
 
-Edizione 1.0 - 31 agosto 2026
+Edizione 1.1 - 31 agosto 2026
 
 Questa pagina riassume il comportamento RF implementato da ESP32 Davis Weather Gateway. È documentazione indipendente di interoperabilità/reverse engineering e **non una specifica ufficiale Davis Instruments**. Alcune conversioni richiedono ancora validazione su hardware reale.
 
@@ -150,13 +150,19 @@ Il rain rate (`0x5`) ricostruisce i secondi dall'ultimo scatto da byte 3 e nibbl
 rain_rate_mm_h = rain_mm_per_tip * 3600 / seconds_since_tip
 ```
 
-## Pressione atmosferica
+## Pressione atmosferica e architettura Davis
 
-La pressione non viene ricavata dal payload RF ISS. Il gateway usa un BME280 locale e riduce il valore al livello del mare in funzione della quota configurata:
+Per la **Wireless Vantage Pro2 Sensor Suite 6322/6322M** usata come riferimento, la pressione barometrica non è tra i sensori dell'ISS esterna. Davis elenca per la sensor suite temperatura e umidità esterne, velocità e direzione del vento e pioggia; UV e radiazione solare sono presenti sulle configurazioni Pro2 Plus o come sensori aggiuntivi.
+
+Nel sistema Davis il barometro è invece collocato sul lato ricevente. **WeatherLink Live** dichiara sensori integrati per pressione barometrica, temperatura interna e umidità interna; anche **Weather Envoy** include barometro e temperatura/umidità interna. Di conseguenza, per l'ISS 6322/6322M, il gateway non deve cercare un packet type RF di pressione.
+
+ESP32 Davis Weather Gateway replica la stessa separazione funzionale usando un **BME280 locale** sul gateway. Il valore misurato viene ridotto al livello del mare in funzione della quota configurata:
 
 ```text
 P0 = Pstation / (1 - altitude_m / 44330) ^ 5.255
 ```
+
+Il BME280 deve essere installato in modo da comunicare correttamente con la pressione ambiente e, per letture termiche locali attendibili, va tenuto lontano dalle principali sorgenti di calore della scheda ESP32.
 
 ## Diagnostica FHSS
 
@@ -176,14 +182,21 @@ Un lock apparentemente stabile con molti slot persi può indicare problemi di ti
 
 I cumulati pioggia e il contatore RF sono persistenti in NVS. Anche le credenziali Wi-Fi sono memorizzate in NVS e non inserite nel sorgente pubblico. Il primo avvio usa l'AP temporaneo `DavisGateway-XXXX` su `192.168.4.1`; DHCP è il default LAN, mentre `192.168.1.120` è soltanto l'indirizzo statico suggerito.
 
-## Limiti noti Edizione 1.0
+## Limiti noti Edizione 1.1
 
 1. La guida descrive il decoder `0.2.0-dev`, non una release stabile.
 2. I packet type non elencati non vengono decodificati.
 3. I byte 8-9 non sono validati nella alpha corrente.
 4. UV, direzione e alcuni dettagli rain-rate richiedono verifica sul campo.
 5. La sincronizzazione SX1276 è logica del progetto, non un algoritmo Davis ufficiale.
+6. La pressione è volutamente locale al gateway e non deriva dal frame RF della ISS 6322/6322M.
 
 ## Riferimenti tecnici pubblici
 
-Vedere [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) per attribuzioni e note di licenza relative ai progetti storici di reverse engineering Davis ISS.
+Riferimenti Davis ufficiali utilizzati per distinguere i sensori ISS dai sensori lato ricevitore:
+
+- https://www.davisinstruments.com/products/wireless-vantage-pro2-integrated-sensor-suite
+- https://www.davisinstruments.com/products/weatherlink-live
+- https://www.davisinstruments.com/products/cabled-weather-envoy-3
+
+Vedere inoltre [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) per attribuzioni e note di licenza relative ai progetti storici di reverse engineering Davis ISS.

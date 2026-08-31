@@ -9,7 +9,7 @@ An independent **ESP32/LILYGO 868 MHz** gateway designed to receive a European *
 
 The firmware receives Davis ISS traffic over **868 MHz FHSS**, decodes weather data, adds atmospheric pressure from a local **BME280**, exposes a web configuration/diagnostics interface, and can upload a Meteobridge/Weather34-compatible record to a user-defined HTTP endpoint.
 
-> `develop` is the active integration branch. `main` is intended to contain reviewed, CI-validated project states.
+> `develop` is the active integration branch. `main` contains reviewed, CI-validated project states.
 
 ## Status
 
@@ -44,6 +44,10 @@ From the local gateway:
 - BME280 atmospheric pressure reduced to sea level
 - local BME280 temperature/humidity
 
+### Davis pressure note
+
+For the **Vantage Pro2 Sensor Suite 6322/6322M**, barometric pressure is not one of the outdoor ISS sensors and is not derived from the ISS RF frame. In the Davis ecosystem the barometer is located on the receiving side: WeatherLink Live and Weather Envoy include a local barometer together with inside temperature/humidity sensors. The gateway follows the same architecture using its local BME280. This distinction is documented in RF Guide Edition 1.1.
+
 ## Davis EU RF profile
 
 The receiver is configured for 2-FSK at 19.2 kbps, 4.8 kHz deviation, Gaussian BT=0.5 shaping, sync word `CB 89`, and a fixed 10-byte payload with software-validated Davis CRC16-CCITT.
@@ -68,7 +72,7 @@ When no valid configuration exists, the gateway creates a temporary access point
 DavisGateway-XXXX
 ```
 
-The setup AP is open by default because it is temporary. It can be protected by defining `PROVISION_AP_PASSWORD` in a private configuration file.
+The setup AP is open by default because it is temporary. It can be protected by defining `PROVISION_AP_PASSWORD` in a private configuration file. A password of at least 8 characters is recommended in untrusted environments.
 
 Captive portal:
 
@@ -105,7 +109,7 @@ The gateway appends:
 
 An upload is considered successful only when the receiver returns HTTP `200` with body `success`.
 
-The web UI provides receiver URL configuration, upload interval, manual upload test, generated-record preview, and TLS mode selection.
+The web UI provides receiver URL configuration, upload interval, manual upload test, generated-record preview, and TLS mode selection. HTTPS certificate verification is the default; insecure TLS must be enabled explicitly by the installer when no trusted CA is configured.
 
 ## Davis and BME280 configuration
 
@@ -129,6 +133,8 @@ When connected to the LAN:
 - manual **TEST UPLOAD** from configuration
 - **RESET NETWORK / SETUP PORTAL** to clear Wi-Fi configuration only
 
+The Web UI is intended for a trusted LAN and should not be exposed directly to the public Internet without an additional authenticated proxy/access-control layer.
+
 ## PlatformIO build
 
 ```bash
@@ -136,12 +142,12 @@ pio run -e t3-v161-868
 pio run -e t3-s3-868
 ```
 
-GitHub Actions builds both targets on `main` and `develop`.
+GitHub Actions builds both targets on `main` and `develop`. PlatformIO, the Espressif32 platform and external library versions are pinned to CI-validated revisions for reproducible builds.
 
 ## Protocol documentation
 
-- [RF protocol guide - Italian PDF](docs/Davis_RF_Protocol_Guide_IT_v1.0.pdf)
-- [RF protocol guide - English PDF](docs/Davis_RF_Protocol_Guide_EN_v1.0.pdf)
+- [RF protocol guide - Italian PDF v1.1](docs/Davis_RF_Protocol_Guide_IT_v1.1.pdf)
+- [RF protocol guide - English PDF v1.1](docs/Davis_RF_Protocol_Guide_EN_v1.1.pdf)
 - [RF protocol notes - Italian](docs/RF_PROTOCOL_IT.md)
 - [RF protocol notes - English](docs/RF_PROTOCOL_EN.md)
 
@@ -150,6 +156,10 @@ These documents are independent technical notes based on the firmware implementa
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Development work should target `develop`; changes intended for `main` should arrive through a reviewed pull request with successful CI checks.
+
+## Security
+
+See [SECURITY.md](SECURITY.md). The public repository must not contain real credentials, private certificates, tokens or installation-specific endpoints.
 
 ## License
 

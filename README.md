@@ -2,16 +2,18 @@
 
 Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis Vantage Pro2 / Pro2 Plus wireless europea**, senza console Davis e senza Meteobridge.
 
-Il progetto riceve la Davis ISS via **868.0–868.6 MHz FHSS**, decodifica i dati meteo, completa la pressione con un **BME280 locale**, offre una dashboard web e invia un record compatibile Meteobridge/Weather34 a un endpoint `mb.php` configurabile.
+Il progetto riceve la Davis ISS via **868 MHz FHSS**, decodifica i dati meteo, completa la pressione con un **BME280 locale**, offre configurazione e diagnostica web e può inviare un record compatibile Meteobridge/Weather34 a un endpoint HTTP configurabile.
+
+> Branch `develop`: sviluppo attivo. `main` viene mantenuto separato fino alla validazione della nuova release.
 
 ## Hardware target
 
 - LILYGO / TTGO LoRa32 T3 V1.6.1 con **SX1276/RFM95 868 MHz**
 - opzionale LILYGO T3-S3 + SX1276 868 MHz
 - Davis Vantage Pro2 / Pro2 Plus wireless EU
-- BME280 su I2C per pressione (e T/H locale)
+- BME280 su I2C per pressione atmosferica e T/H locale
 
-> Una scheda SX1278 433 MHz non è adatta: serve la variante radio 868 MHz (SX1276/RFM95 o equivalente supportata dal profilo).
+Una scheda radio destinata esclusivamente a 433 MHz non è adatta: serve una variante hardware corretta per la banda 868 MHz.
 
 ## Sensori
 
@@ -20,8 +22,8 @@ Dalla Davis ISS:
 - temperatura esterna
 - umidità esterna
 - velocità e direzione vento
-- raffica
-- pioggia / rain rate
+- raffica 10 minuti
+- pioggia e rain rate
 - UV
 - radiazione solare
 - stato batteria trasmettitore
@@ -33,9 +35,9 @@ Dal gateway:
 
 ## RF Davis EU
 
-Il ricevitore usa FSK a 19.2 kbps, deviazione 4.8 kHz, Gaussian shaping BT=0.5, sync `CB 89` e pacchetto fisso di 10 byte con CRC16-CCITT Davis.
+Il ricevitore usa 2-FSK a 19.2 kbps, deviazione 4.8 kHz, shaping Gaussian BT=0.5, sync `CB 89` e pacchetto fisso di 10 byte con CRC16-CCITT Davis.
 
-Hop set EU usato dal firmware:
+Hop set EU implementato:
 
 1. 868.066711 MHz
 2. 868.297119 MHz
@@ -43,33 +45,86 @@ Hop set EU usato dal firmware:
 4. 868.181885 MHz
 5. 868.412292 MHz
 
-Dopo l'acquisizione il firmware segue i salti con periodo nominale di circa 2.555 s; in caso di perdita esegue hop-ahead e poi riacquisizione.
+Dopo l'acquisizione il firmware segue i salti con periodo nominale di circa 2.555 s; in caso di perdita effettua il recupero della sequenza e torna alla fase di acquisizione.
 
-## `mb.php` / Aurora / DIGA
+## Primo avvio e configurazione Wi-Fi
 
-La Web UI permette di impostare, ad esempio:
+SSID e password **non vengono inseriti nel sorgente pubblico**.
+
+Al primo avvio, o quando non esiste una configurazione valida, il gateway crea un access point temporaneo:
 
 ```text
-https://meteostz05013.ddns.net/diga/mbridge/mb.php
+DavisGateway-XXXX
 ```
 
-Il firmware aggiunge:
+Per impostazione predefinita l'AP di setup è aperto; può essere protetto definendo `PROVISION_AP_PASSWORD` in `config_private.h`.
+
+Il portale captive è disponibile su:
+
+```text
+http://192.168.4.1
+```
+
+Da qui si configurano SSID, password, hostname e indirizzamento LAN. **DHCP è il default**; scegliendo IP statico il profilo proposto è:
+
+```text
+IP       192.168.1.120
+Gateway  192.168.1.1
+Netmask  255.255.255.0
+DNS      192.168.1.1
+```
+
+`192.168.1.120` è solo il valore suggerito: va verificato che sia libero e compatibile con la LAN dell'installazione.
+
+Se una rete già configurata non è raggiungibile per 60 secondi, il gateway attiva automaticamente il portale di recovery mantenendo i parametri salvati. Sul profilo T3-S3 è inoltre previsto il richiamo manuale del provisioning tramite pressione prolungata del pulsante utente.
+
+Tutta la configurazione è salvata in **NVS**.
+
+## Endpoint HTTP / `mb.php`
+
+L'endpoint non contiene alcun indirizzo predefinito e viene deciso dall'utente. Esempio puramente generico:
+
+```text
+https://server.example/weather/mb.php
+```
+
+Il firmware aggiunge il parametro:
 
 ```text
 ?d=<record Meteobridge/Weather34 URL-encoded>
 ```
 
-L'invio è considerato riuscito soltanto se il server risponde HTTP `200` e corpo `success`.
+Un invio è considerato riuscito solo con risposta HTTP `200` e corpo `success`.
 
-Il payload ha 192 posizioni per rimanere compatibile con le estensioni Weather34/Aurora; i campi Davis/BME disponibili sono valorizzati, quelli non applicabili restano `--`/compatibili.
+La dashboard offre:
 
-## Configurazione
+- configurazione URL receiver
+- intervallo upload
+- test manuale dell'invio
+- anteprima del record generato
+- scelta modalità TLS
 
-```bash
-cp src/config_private.example.h src/config_private.h
-```
+## Configurazione Davis e BME280
 
-Impostare almeno Wi-Fi. Tutte le impostazioni operative di `mb.php`, intervallo upload, ID ISS e rain-tip possono poi essere modificate dalla Web UI e sono salvate in NVS.
+Dalla Web UI si impostano anche:
+
+- ID trasmettitore Davis: `0` auto-lock oppure `1..8`
+- dimensione scatto pluviometro in mm
+- quota del BME280 per la riduzione della pressione al livello del mare
+- timezone POSIX
+
+I cumulati pioggia giorno/mese/anno e il contatore RF vengono conservati in NVS per evitare azzeramenti anomali dopo un riavvio.
+
+## Web API
+
+A rete operativa:
+
+- `/` dashboard
+- `/config` configurazione completa
+- `/api/status` stato JSON
+- `/api/meteobridge` anteprima record
+- `TEST UPLOAD` dalla pagina configurazione
+- `RESET RETE / PORTALE SETUP` per cancellare solo la configurazione Wi-Fi
 
 ## Build PlatformIO
 
@@ -83,21 +138,20 @@ oppure:
 pio run -e t3-s3-868
 ```
 
-## Web API
+Le build CI vengono eseguite su `main` e `develop` tramite GitHub Actions.
 
-- `/` dashboard/configurazione
-- `/api/status` stato JSON
-- `/api/meteobridge` anteprima del record che verrebbe inviato a `mb.php`
-- pulsante **TEST INVIO** nella dashboard
+## Documentazione protocollo
+
+Nel branch `develop` è presente la guida tecnica:
+
+`docs/Guida_Codifiche_RF_Davis_Vantage_Pro2_EU_Edizione_1.pdf`
+
+La guida descrive il livello RF, il frequency hopping europeo, il framing, il CRC, la mappa dei pacchetti e le conversioni implementate. È documentazione tecnica indipendente basata su informazioni pubbliche e reverse engineering e non è documentazione ufficiale Davis Instruments.
 
 ## Stato del progetto
 
-`0.1.0-alpha1`: prima implementazione Davis-only. Il decoder e la logica RF sono progettati per test sul campo con ISS europea reale; prima di considerare stabile il firmware vanno verificati ricezione, sincronizzazione hop e valori UV/solare/pioggia sull'hardware definitivo.
-
-## Riferimenti tecnici
-
-Il protocollo è stato implementato a partire da informazioni pubbliche/reverse-engineered sul collegamento Davis ISS, incluse le specifiche RF Davis e i progetti storici DavisRFM69. Il codice di questo repository è una nuova implementazione per ESP32/SX1276 e RadioLib.
+`0.2.0-dev`: implementazione Davis-only in fase di validazione su hardware reale. Prima della promozione su `main` vanno verificati sul campo sincronizzazione FHSS, valori dei diversi packet type e continuità dell'upload HTTP.
 
 ## Licenza
 
-GPL-3.0, in continuità con il progetto ESP32 Oregon/Technoline da cui deriva l'architettura generale del gateway.
+GPL-3.0.

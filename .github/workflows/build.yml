@@ -1,0 +1,24 @@
+name: Build firmware
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  platformio:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [t3-v161-868, t3-s3-868]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build ${{ matrix.environment }}
+        run: pio run -e ${{ matrix.environment }}

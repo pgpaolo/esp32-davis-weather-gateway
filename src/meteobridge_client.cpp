@@ -14,7 +14,7 @@ namespace {
 UploadStatus status;
 uint32_t lastUploadMs = 0;
 
-String fval(float v, uint8_t decimals=1) {
+String fval(float v, unsigned int decimals=1U) {
   if(!isfinite(v)) return "--";
   return String(v, decimals);
 }
@@ -67,43 +67,43 @@ String buildMeteobridgeCompatibleRecord(const StationState &s) {
   const float dew=calcDewPointC(s.outTempC,s.outHumidity);
   const float chill=calcWindChillC(s.outTempC,s.windKmh);
 
-  f[2]=fval(s.outTempC,1);
-  f[3]=fval(s.outHumidity,0);
-  f[4]=fval(dew,1);
-  f[5]=fval(windMs,1);
-  f[6]=fval(windMs,1);
-  f[7]=fval(s.windDirDeg,0);
-  f[8]=fval(s.rainRateMmH,1);
-  f[9]=fval(s.rainDayMm,1);
-  f[10]=fval(s.pressureHpa,1);
+  f[2]=fval(s.outTempC,1U);
+  f[3]=fval(s.outHumidity,0U);
+  f[4]=fval(dew,1U);
+  f[5]=fval(windMs,1U);
+  f[6]=fval(windMs,1U);
+  f[7]=fval(s.windDirDeg,0U);
+  f[8]=fval(s.rainRateMmH,1U);
+  f[9]=fval(s.rainDayMm,1U);
+  f[10]=fval(s.pressureHpa,1U);
   f[12]=isfinite(windMs)?String(calcBeaufort(windMs)):"--";
   f[15]="hPa";
   f[16]="mm";
-  f[19]=fval(s.rainMonthMm,1);
-  f[20]=fval(s.rainYearMm,1);
-  f[22]=fval(s.indoorTempC,1);
-  f[23]=fval(s.indoorHumidity,0);
-  f[24]=fval(chill,1);
-  f[26]=fval(s.tempDayHighC,1);
+  f[19]=fval(s.rainMonthMm,1U);
+  f[20]=fval(s.rainYearMm,1U);
+  f[22]=fval(s.indoorTempC,1U);
+  f[23]=fval(s.indoorHumidity,0U);
+  f[24]=fval(chill,1U);
+  f[26]=fval(s.tempDayHighC,1U);
   f[27]=epochText(s.tempDayHighEpoch);
-  f[28]=fval(s.tempDayLowC,1);
+  f[28]=fval(s.tempDayLowC,1U);
   f[29]=epochText(s.tempDayLowEpoch);
-  f[30]=fval(isfinite(s.windDayMaxKmh)?s.windDayMaxKmh/3.6f:NAN,1);
+  f[30]=fval(isfinite(s.windDayMaxKmh)?s.windDayMaxKmh/3.6f:NAN,1U);
   f[31]=epochText(s.windDayMaxEpoch);
-  f[32]=fval(isfinite(s.gustDayMaxKmh)?s.gustDayMaxKmh/3.6f:NAN,1);
+  f[32]=fval(isfinite(s.gustDayMaxKmh)?s.gustDayMaxKmh/3.6f:NAN,1U);
   f[33]=epochText(s.gustDayMaxEpoch);
-  f[34]=fval(s.pressureDayHighHpa,1);
-  f[36]=fval(s.pressureDayLowHpa,1);
+  f[34]=fval(s.pressureDayHighHpa,1U);
+  f[36]=fval(s.pressureDayLowHpa,1U);
   f[38]=FIRMWARE_VERSION;
   f[39]="develop";
-  f[40]=fval(gustMs,1);
+  f[40]=fval(gustMs,1U);
   f[41]="ESP32";
   f[42]="Davis-VP2";
-  f[43]=fval(s.uv,1);
-  f[45]=fval(s.solarWm2,0);
-  f[46]=fval(s.windDirDeg,0);
-  f[58]=fval(s.uvDayMax,1);
-  f[80]=fval(s.solarDayMax,0);
+  f[43]=fval(s.uv,1U);
+  f[45]=fval(s.solarWm2,0U);
+  f[46]=fval(s.windDirDeg,0U);
+  f[58]=fval(s.uvDayMax,1U);
+  f[80]=fval(s.solarDayMax,0U);
   f[81]=String(millis()/1000UL);
 
   String out;

@@ -6,6 +6,7 @@
 
 #include "board_config.h"
 #include "config.h"
+#include "runtime_config.h"
 
 namespace {
 Adafruit_BME280 bme;
@@ -46,7 +47,7 @@ void servicePressureSensor(StationState &station) {
   const float temp = bme.readTemperature();
   const float hum = bme.readHumidity();
   const float stationHpa = bme.readPressure() / 100.0f;
-  const float seaHpa = seaLevelPressure(stationHpa, BME280_ALTITUDE_M);
+  const float seaHpa = seaLevelPressure(stationHpa, runtimeConfig.bmeAltitudeM);
 
   if (isfinite(temp)) station.indoorTempC = temp;
   if (isfinite(hum) && hum >= 0.0f && hum <= 100.0f) station.indoorHumidity = hum;

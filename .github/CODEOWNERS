@@ -1,0 +1,7 @@
+# Default ownership for repository changes.
+* @pgpaolo
+
+# RF/protocol and firmware-critical areas.
+/src/ @pgpaolo
+/docs/ @pgpaolo
+/.github/workflows/ @pgpaolo

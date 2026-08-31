@@ -1,17 +1,30 @@
 # ESP32 Davis Weather Gateway
 
+**Italiano** | [English](README_EN.md)
+
+[![Build firmware](https://github.com/pgpaolo/esp32-davis-weather-gateway/actions/workflows/build.yml/badge.svg)](https://github.com/pgpaolo/esp32-davis-weather-gateway/actions/workflows/build.yml)
+![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)
+
 Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis Vantage Pro2 / Pro2 Plus wireless europea**, senza console Davis e senza Meteobridge.
 
-Il progetto riceve la Davis ISS via **868.0–868.6 MHz FHSS**, decodifica i dati meteo, completa la pressione con un **BME280 locale**, offre una dashboard web e invia un record compatibile Meteobridge/Weather34 a un endpoint `mb.php` configurabile.
+Il progetto riceve la Davis ISS via **868 MHz FHSS**, decodifica i dati meteo, completa la pressione con un **BME280 locale**, offre configurazione e diagnostica web e può inviare un record compatibile Meteobridge/Weather34 a un endpoint HTTP configurabile dall'utente.
+
+> `develop` è il branch di integrazione attivo. `main` è destinato a contenere stati del progetto revisionati e validati dalla CI.
+
+## Stato del progetto
+
+Versione di sviluppo corrente: `0.2.0-dev`.
+
+La compilazione CI è validata per entrambi i target LILYGO supportati. La parte RF resta in validazione sul campo contro hardware Davis reale; i dettagli derivati da reverse engineering pubblico sono documentati come tali.
 
 ## Hardware target
 
 - LILYGO / TTGO LoRa32 T3 V1.6.1 con **SX1276/RFM95 868 MHz**
-- opzionale LILYGO T3-S3 + SX1276 868 MHz
-- Davis Vantage Pro2 / Pro2 Plus wireless EU
-- BME280 su I2C per pressione (e T/H locale)
+- profilo opzionale LILYGO T3-S3 + SX1276 868 MHz
+- Davis Vantage Pro2 / Pro2 Plus wireless EU ISS
+- BME280 su I2C per pressione atmosferica e T/H locale
 
-> Una scheda SX1278 433 MHz non è adatta: serve la variante radio 868 MHz (SX1276/RFM95 o equivalente supportata dal profilo).
+Una scheda radio destinata esclusivamente a 433 MHz non è adatta: serve hardware corretto per la banda europea 868 MHz.
 
 ## Sensori
 
@@ -20,8 +33,8 @@ Dalla Davis ISS:
 - temperatura esterna
 - umidità esterna
 - velocità e direzione vento
-- raffica
-- pioggia / rain rate
+- raffica 10 minuti
+- pioggia e rain rate
 - UV
 - radiazione solare
 - stato batteria trasmettitore
@@ -33,9 +46,9 @@ Dal gateway:
 
 ## RF Davis EU
 
-Il ricevitore usa FSK a 19.2 kbps, deviazione 4.8 kHz, Gaussian shaping BT=0.5, sync `CB 89` e pacchetto fisso di 10 byte con CRC16-CCITT Davis.
+Il ricevitore usa 2-FSK a 19.2 kbps, deviazione 4.8 kHz, shaping Gaussian BT=0.5, sync `CB 89` e pacchetto fisso di 10 byte con CRC16-CCITT Davis verificato in software.
 
-Hop set EU usato dal firmware:
+Hop set EU implementato:
 
 1. 868.066711 MHz
 2. 868.297119 MHz
@@ -43,61 +56,107 @@ Hop set EU usato dal firmware:
 4. 868.181885 MHz
 5. 868.412292 MHz
 
-Dopo l'acquisizione il firmware segue i salti con periodo nominale di circa 2.555 s; in caso di perdita esegue hop-ahead e poi riacquisizione.
+Dopo l'acquisizione il firmware segue i salti con periodo nominale di circa 2.555 s; in caso di perdita torna alla fase di acquisizione.
 
-## `mb.php` / Aurora / DIGA
+## Primo avvio e configurazione Wi-Fi
 
-La Web UI permette di impostare, ad esempio:
+SSID e password **non vengono inseriti nel sorgente pubblico**.
+
+Al primo avvio, o quando non esiste una configurazione valida, il gateway crea un access point temporaneo:
 
 ```text
-https://meteostz05013.ddns.net/diga/mbridge/mb.php
+DavisGateway-XXXX
 ```
 
-Il firmware aggiunge:
+Per impostazione predefinita l'AP di setup è aperto perché temporaneo; può essere protetto definendo `PROVISION_AP_PASSWORD` in un file di configurazione privato.
+
+Il captive portal è disponibile su:
+
+```text
+http://192.168.4.1
+```
+
+Da qui si configurano SSID, password, hostname e indirizzamento LAN. **DHCP è il default**; scegliendo IP statico il profilo proposto è:
+
+```text
+IP       192.168.1.120
+Gateway  192.168.1.1
+Netmask  255.255.255.0
+DNS      192.168.1.1
+```
+
+`192.168.1.120` è soltanto il valore suggerito e va verificato rispetto alla LAN dell'installazione.
+
+Se una rete già configurata non è raggiungibile per 60 secondi, il gateway attiva automaticamente il portale di recovery mantenendo i parametri salvati. Tutta la configurazione runtime è salvata in **NVS**.
+
+## Endpoint HTTP / `mb.php`
+
+Il firmware pubblico non contiene **alcun endpoint specifico di installazione**. Ogni utente configura il proprio receiver dalla Web UI, ad esempio:
+
+```text
+https://server.example/weather/mb.php
+```
+
+Il gateway aggiunge:
 
 ```text
 ?d=<record Meteobridge/Weather34 URL-encoded>
 ```
 
-L'invio è considerato riuscito soltanto se il server risponde HTTP `200` e corpo `success`.
+Un invio è considerato riuscito solo con risposta HTTP `200` e corpo `success`.
 
-Il payload ha 192 posizioni per rimanere compatibile con le estensioni Weather34/Aurora; i campi Davis/BME disponibili sono valorizzati, quelli non applicabili restano `--`/compatibili.
+La dashboard offre configurazione URL receiver, intervallo upload, test manuale dell'invio, anteprima del record generato e scelta modalità TLS.
 
-## Configurazione
+## Configurazione Davis e BME280
 
-```bash
-cp src/config_private.example.h src/config_private.h
-```
+Dalla Web UI si impostano anche:
 
-Impostare almeno Wi-Fi. Tutte le impostazioni operative di `mb.php`, intervallo upload, ID ISS e rain-tip possono poi essere modificate dalla Web UI e sono salvate in NVS.
+- ID trasmettitore Davis: `0` auto-lock oppure `1..8`
+- dimensione scatto pluviometro in mm
+- quota del BME280 per la riduzione della pressione al livello del mare
+- timezone POSIX
+
+I cumulati pioggia giorno/mese/anno e il contatore RF sono conservati in NVS per evitare azzeramenti anomali dopo un riavvio.
+
+## Web API
+
+A rete operativa:
+
+- `/` - dashboard
+- `/config` - configurazione completa
+- `/api/status` - stato JSON
+- `/api/meteobridge` - anteprima record
+- **TEST UPLOAD** dalla pagina configurazione
+- **RESET RETE / PORTALE SETUP** per cancellare solo la configurazione Wi-Fi
 
 ## Build PlatformIO
 
 ```bash
 pio run -e t3-v161-868
-```
-
-oppure:
-
-```bash
 pio run -e t3-s3-868
 ```
 
-## Web API
+GitHub Actions compila entrambi i target su `main` e `develop`.
 
-- `/` dashboard/configurazione
-- `/api/status` stato JSON
-- `/api/meteobridge` anteprima del record che verrebbe inviato a `mb.php`
-- pulsante **TEST INVIO** nella dashboard
+## Documentazione protocollo
 
-## Stato del progetto
+- [Guida RF Davis - PDF italiano](docs/Davis_RF_Protocol_Guide_IT_v1.0.pdf)
+- [Davis RF protocol guide - English PDF](docs/Davis_RF_Protocol_Guide_EN_v1.0.pdf)
+- [Note protocollo RF - Italiano](docs/RF_PROTOCOL_IT.md)
+- [RF protocol notes - English](docs/RF_PROTOCOL_EN.md)
 
-`0.1.0-alpha1`: prima implementazione Davis-only. Il decoder e la logica RF sono progettati per test sul campo con ISS europea reale; prima di considerare stabile il firmware vanno verificati ricezione, sincronizzazione hop e valori UV/solare/pioggia sull'hardware definitivo.
+La documentazione è tecnica e indipendente, basata sull'implementazione del firmware e su informazioni pubbliche/reverse-engineered. **Non è documentazione ufficiale Davis Instruments.**
 
-## Riferimenti tecnici
+## Branch e contributi
 
-Il protocollo è stato implementato a partire da informazioni pubbliche/reverse-engineered sul collegamento Davis ISS, incluse le specifiche RF Davis e i progetti storici DavisRFM69. Il codice di questo repository è una nuova implementazione per ESP32/SX1276 e RadioLib.
+Vedere [CONTRIBUTING.md](CONTRIBUTING.md). Lo sviluppo ordinario parte da `develop`; la promozione a `main` avviene tramite pull request dopo revisione e CI verde.
+
+## Riferimenti e terze parti
+
+Vedere [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) per attribuzioni, riferimenti storici di interoperabilità e note di licenza delle dipendenze/progetti citati.
 
 ## Licenza
 
-GPL-3.0, in continuità con il progetto ESP32 Oregon/Technoline da cui deriva l'architettura generale del gateway.
+Il codice e la documentazione originali del progetto sono distribuiti sotto **GNU Lesser General Public License v3.0 only (`LGPL-3.0-only`)**, salvo diversa indicazione nel singolo file.
+
+Vedere [LICENSE](LICENSE) e [COPYING](COPYING).

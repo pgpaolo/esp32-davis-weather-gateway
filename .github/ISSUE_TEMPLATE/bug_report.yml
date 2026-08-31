@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a reproducible firmware or hardware-integration problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include Wi-Fi passwords, tokens, private certificates or sensitive endpoints."
+  - type: input
+    id: version
+    attributes:
+      label: Firmware version / commit
+      placeholder: "0.2.0-dev or commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: board
+    attributes:
+      label: Hardware target
+      options:
+        - T3 V1.6.1 868
+        - T3-S3 868
+        - Other / custom
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: Describe the observed and expected behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs / packet samples
+      render: text

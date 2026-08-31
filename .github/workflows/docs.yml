@@ -16,6 +16,7 @@ on:
   workflow_dispatch:
 
 # Canonical generated artifacts: bilingual RF PDFs plus GNU license texts.
+# Keep generated files synchronized on develop before promotion to main.
 permissions:
   contents: write
 

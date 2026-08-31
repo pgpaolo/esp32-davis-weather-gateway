@@ -19,7 +19,15 @@ bool started=false;
 
 String esc(const String &s){
   String o; o.reserve(s.length()+8);
-  for(size_t i=0;i<s.length();i++){ char c=s[i]; if(c=='&')o+=F("&amp;"); else if(c=='<')o+=F("&lt;"); else if(c=='>')o+=F("&gt;"); else if(c=='\"')o+=F("&quot;"); else o+=c; }
+  for(size_t i=0;i<s.length();i++){
+    char c=s[i];
+    if(c=='&')o+=F("&amp;");
+    else if(c=='<')o+=F("&lt;");
+    else if(c=='>')o+=F("&gt;");
+    else if(c=='\"')o+=F("&quot;");
+    else if(c==39)o+=F("&#39;");
+    else o+=c;
+  }
   return o;
 }
 String jf(float v,unsigned int d=1U){ return isfinite(v)?String(v,d):String("null"); }
@@ -47,10 +55,10 @@ String page(){
 }
 
 String configPage(const String &msg=String()){
-  String h; h.reserve(7500);
-  h+=F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Configurazione</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:24px auto;padding:0 14px}fieldset{margin:14px 0;padding:14px}label{display:block;margin-top:10px;font-weight:600}input{box-sizing:border-box;width:100%;padding:8px}input[type=checkbox]{width:auto}button{padding:10px 15px}.msg{background:#eef6ee;padding:8px}</style></head><body><h1>Configurazione</h1>");
+  String h; h.reserve(7800);
+  h+=F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Configurazione</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:24px auto;padding:0 14px}fieldset{margin:14px 0;padding:14px}label{display:block;margin-top:10px;font-weight:600}input{box-sizing:border-box;width:100%;padding:8px}input[type=checkbox]{width:auto}button{padding:10px 15px}.msg{background:#eef6ee;padding:8px}small{color:#666}</style></head><body><h1>Configurazione</h1>");
   if(!msg.isEmpty()){h+=F("<p class='msg'>");h+=esc(msg);h+=F("</p>");}
-  h+=F("<form method='POST' action='/save'><fieldset><legend>Rete</legend><label>SSID</label><input name='ssid' value='");h+=esc(runtimeConfig.wifiSsid);h+=F("'><label>Nuova password Wi-Fi</label><input type='password' name='pass' placeholder='vuoto = mantiene quella esistente'><label>Hostname</label><input name='host' value='");h+=esc(runtimeConfig.hostname);h+=F("'><label><input type='checkbox' name='dhcp' value='1' ");if(runtimeConfig.useDhcp)h+=F("checked");h+=F("> DHCP</label><label>IP statico</label><input name='ip' value='");h+=esc(runtimeConfig.staticIp);h+=F("'><label>Gateway</label><input name='gw' value='");h+=esc(runtimeConfig.gateway);h+=F("'><label>Netmask</label><input name='mask' value='");h+=esc(runtimeConfig.netmask);h+=F("'><label>DNS</label><input name='dns' value='");h+=esc(runtimeConfig.dns);h+=F("'></fieldset>");
+  h+=F("<form method='POST' action='/save'><fieldset><legend>Rete</legend><label>SSID</label><input name='ssid' value='");h+=esc(runtimeConfig.wifiSsid);h+=F("'><label>Nuova password Wi-Fi</label><input type='password' name='pass' autocomplete='new-password' placeholder='vuoto = mantiene quella esistente'><small>La password salvata non viene mai inviata al browser.</small><label><input type='checkbox' name='clearpass' value='1'> Cancella password / rete Wi-Fi aperta</label><label>Hostname</label><input name='host' value='");h+=esc(runtimeConfig.hostname);h+=F("'><label><input type='checkbox' name='dhcp' value='1' ");if(runtimeConfig.useDhcp)h+=F("checked");h+=F("> DHCP</label><label>IP statico</label><input name='ip' value='");h+=esc(runtimeConfig.staticIp);h+=F("'><label>Gateway</label><input name='gw' value='");h+=esc(runtimeConfig.gateway);h+=F("'><label>Netmask</label><input name='mask' value='");h+=esc(runtimeConfig.netmask);h+=F("'><label>DNS</label><input name='dns' value='");h+=esc(runtimeConfig.dns);h+=F("'></fieldset>");
   h+=F("<fieldset><legend>Davis / sensori</legend><label>ID ISS (0=auto)</label><input type='number' min='0' max='8' name='issid' value='");h+=String(runtimeConfig.issId);h+=F("'><label>Rain tip mm</label><input type='number' step='0.001' min='0.05' max='1' name='raintip' value='");h+=String(runtimeConfig.rainMmPerTip,3);h+=F("'><label>Quota BME280 m</label><input type='number' step='0.1' min='-500' max='9000' name='altm' value='");h+=String(runtimeConfig.bmeAltitudeM,1);h+=F("'><label>Timezone POSIX</label><input name='tz' value='");h+=esc(runtimeConfig.tzInfo);h+=F("'></fieldset>");
   h+=F("<fieldset><legend>Upload HTTP</legend><label>Endpoint receiver</label><input name='mburl' placeholder='https://server.example/path/mb.php' value='");h+=esc(runtimeConfig.mbUrl);h+=F("'><label>Intervallo ms</label><input type='number' min='5000' max='300000' name='mbint' value='");h+=String(runtimeConfig.uploadIntervalMs);h+=F("'><label><input type='checkbox' name='tlsinsec' value='1' ");if(runtimeConfig.tlsInsecure)h+=F("checked");h+=F("> HTTPS senza verifica certificato</label></fieldset><button>SALVA E RIAVVIA</button></form>");
   h+=F("<form method='POST' action='/test-upload'><button>TEST UPLOAD</button></form><form method='POST' action='/reset-network' onsubmit=\"return confirm('Cancellare la configurazione Wi-Fi?')\"><button>RESET RETE / PORTALE SETUP</button></form><p><a href='/'>Torna alla dashboard</a></p></body></html>"); return h;
@@ -66,8 +74,13 @@ void initWeb(StationState &station){
   server.on("/config",HTTP_GET,[]{server.send(200,"text/html; charset=utf-8",configPage());});
   server.on("/save",HTTP_POST,[]{
     String ssid=server.arg("ssid"); if(ssid.isEmpty()){server.send(400,"text/html; charset=utf-8",configPage("SSID obbligatorio"));return;}
+    const String previousSsid=runtimeConfig.wifiSsid;
+    const String submittedPassword=server.arg("pass");
+    const bool clearPassword=server.hasArg("clearpass");
     runtimeConfig.wifiSsid=ssid;
-    if(!server.arg("pass").isEmpty()) runtimeConfig.wifiPassword=server.arg("pass");
+    if(clearPassword) runtimeConfig.wifiPassword="";
+    else if(!submittedPassword.isEmpty()) runtimeConfig.wifiPassword=submittedPassword;
+    else if(ssid!=previousSsid) runtimeConfig.wifiPassword="";
     runtimeConfig.hostname=server.arg("host"); if(runtimeConfig.hostname.isEmpty())runtimeConfig.hostname=DEVICE_HOSTNAME_DEFAULT;
     runtimeConfig.useDhcp=server.hasArg("dhcp");
     runtimeConfig.staticIp=server.arg("ip"); runtimeConfig.gateway=server.arg("gw"); runtimeConfig.netmask=server.arg("mask"); runtimeConfig.dns=server.arg("dns");

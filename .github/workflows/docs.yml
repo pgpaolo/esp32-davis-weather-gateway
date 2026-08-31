@@ -11,45 +11,58 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
-# Canonical generated artifacts: bilingual RF PDFs plus GNU license texts.
-# The PR job always runs so it can be configured as a required status check.
-# Generated artifacts are committed only on develop.
-permissions:
-  contents: write
+# Pull requests only verify reproducibility with read-only permissions.
+# Generated PDFs are committed only by the develop publication job.
 
 jobs:
   build-docs:
-    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
       - name: Install documentation dependencies
-        run: pip install reportlab
+        run: python -m pip install --disable-pip-version-check reportlab==5.0.1
       - name: Generate protocol PDFs
         run: python tools/build_protocol_pdfs.py
-      - name: Install canonical GNU license texts
-        if: github.event_name != 'pull_request'
+      - name: Verify generated documentation is committed and reproducible
         run: |
-          curl -fsSL https://www.gnu.org/licenses/lgpl-3.0.txt -o LICENSE
-          curl -fsSL https://www.gnu.org/licenses/gpl-3.0.txt -o COPYING
-      - name: Verify generated documentation on pull requests
-        if: github.event_name == 'pull_request'
+          test -s docs/Davis_RF_Protocol_Guide_IT_v1.1.pdf
+          test -s docs/Davis_RF_Protocol_Guide_EN_v1.1.pdf
+          git diff --exit-code -- docs/Davis_RF_Protocol_Guide_IT_v1.1.pdf docs/Davis_RF_Protocol_Guide_EN_v1.1.pdf
+
+  publish-docs:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install documentation dependencies
+        run: python -m pip install --disable-pip-version-check reportlab==5.0.1
+      - name: Generate protocol PDFs
+        run: python tools/build_protocol_pdfs.py
+      - name: Commit generated documentation
         run: |
-          test -s docs/Davis_RF_Protocol_Guide_IT_v1.0.pdf
-          test -s docs/Davis_RF_Protocol_Guide_EN_v1.0.pdf
-      - name: Commit generated documentation and license texts
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/develop'
-        run: |
-          if [ -z "$(git status --porcelain --untracked-files=all -- docs/*.pdf LICENSE COPYING)" ]; then
-            echo "Generated files already up to date."
+          if [ -z "$(git status --porcelain --untracked-files=all -- docs/*.pdf)" ]; then
+            echo "Generated PDFs already up to date."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/*.pdf LICENSE COPYING
-          git commit -m "Build protocol PDFs and license texts"
+          git add docs/*.pdf
+          git commit -m "Build RF protocol PDFs v1.1"
           git push origin HEAD:develop

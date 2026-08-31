@@ -34,6 +34,7 @@ String htmlEscape(const String &s) {
     else if(c=='<') out += F("&lt;");
     else if(c=='>') out += F("&gt;");
     else if(c=='\"') out += F("&quot;");
+    else if(c==39) out += F("&#39;");
     else out += c;
   }
   return out;
@@ -100,8 +101,7 @@ String setupPage(const String &message = String()) {
   h += F("<fieldset><legend><b>Wi-Fi</b></legend>");
   if(!options.isEmpty()) { h += F("<label>Reti rilevate</label><select name='scan' onchange=\"if(this.value)document.getElementsByName('ssid')[0].value=this.value\"><option value=''>-- seleziona --</option>"); h += options; h += F("</select>"); }
   h += F("<label>SSID</label><input name='ssid' maxlength='32' required value='"); h += htmlEscape(runtimeConfig.wifiSsid); h += F("'>");
-  // Never send the stored credential back to the browser/DOM.
-  h += F("<label>Password Wi-Fi</label><input name='pass' type='password' maxlength='63' value=''><small>La password salvata non viene mai mostrata. Lascia vuoto per mantenerla se l'SSID non cambia.</small>");
+  h += F("<label>Password Wi-Fi</label><input name='pass' type='password' maxlength='63' autocomplete='new-password' value=''><small>La password salvata non viene mai mostrata. Lascia vuoto per mantenerla se l'SSID non cambia.</small>");
   h += F("<label><input type='checkbox' name='clearpass' value='1'> Cancella password / rete Wi-Fi aperta</label>");
   h += F("<label>Hostname</label><input name='host' maxlength='31' value='"); h += htmlEscape(runtimeConfig.hostname); h += F("'>");
   h += F("</fieldset>");
@@ -142,7 +142,6 @@ void configurePortalRoutes() {
     if(clearPassword) runtimeConfig.wifiPassword = "";
     else if(!submittedPassword.isEmpty()) runtimeConfig.wifiPassword = submittedPassword;
     else if(ssid != previousSsid) runtimeConfig.wifiPassword = "";
-    // Same SSID + blank field keeps the credential already present in RAM/NVS.
 
     runtimeConfig.hostname = portal.arg("host");
     if(runtimeConfig.hostname.isEmpty()) runtimeConfig.hostname = DEVICE_HOSTNAME_DEFAULT;

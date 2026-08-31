@@ -19,6 +19,8 @@ The project follows a development-first branch model. Versions marked `-dev` are
 - GitHub Actions pinned to immutable commit SHAs.
 - PlatformIO, Espressif32 platform and external libraries pinned to versions validated by CI.
 - Documentation generation dependencies pinned and license files no longer refreshed from the network during CI.
+- Stored Wi-Fi passwords are never rendered back into provisioning/configuration HTML or printed to the serial log.
+- HTML attribute escaping now covers apostrophes in user/network-controlled values such as SSIDs, hostnames and receiver URLs.
 
 ## [0.2.0-dev] - 2026-08-31
 

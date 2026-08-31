@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+src/config_private.h
+*.bin
+*.elf
+*.map
+.DS_Store

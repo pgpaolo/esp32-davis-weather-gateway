@@ -2,16 +2,17 @@
 from pathlib import Path
 import re
 from reportlab import rl_config
+
+# Must be set before importing ReportLab document primitives. This freezes
+# timestamps/object IDs so regenerated PDFs are byte-for-byte reproducible.
+rl_config.invariant = 1
+
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Preformatted, Table, TableStyle
-
-# Stable object IDs/timestamps so the committed PDFs can be reproduced and
-# compared byte-for-byte by CI from the Markdown sources.
-rl_config.invariant = 1
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"

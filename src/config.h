@@ -5,50 +5,53 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.1.0-alpha1"
+#define FIRMWARE_VERSION "0.2.0-dev"
 #endif
-#ifndef DEVICE_HOSTNAME
-#define DEVICE_HOSTNAME "davis-gateway"
+
+#ifndef DEVICE_HOSTNAME_DEFAULT
+#define DEVICE_HOSTNAME_DEFAULT "davis-gateway"
 #endif
-#ifndef WIFI_SSID
-#define WIFI_SSID "NomeReteWiFi"
+
+#ifndef PROVISION_AP_PREFIX
+#define PROVISION_AP_PREFIX "DavisGateway"
 #endif
-#ifndef WIFI_PASSWORD
-#define WIFI_PASSWORD "PasswordWiFi"
+#ifndef PROVISION_AP_PASSWORD
+// Empty by default: the setup AP is temporary and open. Define an 8+ char
+// password in config_private.h if a protected provisioning AP is preferred.
+#define PROVISION_AP_PASSWORD ""
 #endif
-#ifndef WIFI_USE_STATIC_IP
-#define WIFI_USE_STATIC_IP 0
+#ifndef WIFI_CONNECT_TIMEOUT_MS
+#define WIFI_CONNECT_TIMEOUT_MS 60000UL
 #endif
-#ifndef WIFI_IP_A
-#define WIFI_IP_A 192
-#define WIFI_IP_B 168
-#define WIFI_IP_C 1
-#define WIFI_IP_D 221
+#ifndef WIFI_RETRY_INTERVAL_MS
+#define WIFI_RETRY_INTERVAL_MS 30000UL
 #endif
-#ifndef WIFI_GW_A
-#define WIFI_GW_A 192
-#define WIFI_GW_B 168
-#define WIFI_GW_C 1
-#define WIFI_GW_D 1
+#ifndef PROVISION_BUTTON_HOLD_MS
+#define PROVISION_BUTTON_HOLD_MS 5000UL
 #endif
-#ifndef WIFI_MASK_A
-#define WIFI_MASK_A 255
-#define WIFI_MASK_B 255
-#define WIFI_MASK_C 255
-#define WIFI_MASK_D 0
+
+// Suggested static LAN profile. DHCP remains the first-boot default.
+#ifndef STATIC_IP_DEFAULT
+#define STATIC_IP_DEFAULT "192.168.1.120"
+#endif
+#ifndef STATIC_GATEWAY_DEFAULT
+#define STATIC_GATEWAY_DEFAULT "192.168.1.1"
+#endif
+#ifndef STATIC_MASK_DEFAULT
+#define STATIC_MASK_DEFAULT "255.255.255.0"
+#endif
+#ifndef STATIC_DNS_DEFAULT
+#define STATIC_DNS_DEFAULT "192.168.1.1"
 #endif
 
 #ifndef DAVIS_ISS_ID
-#define DAVIS_ISS_ID 0       // 0=auto-lock; 1..8=ID Davis esplicito
+#define DAVIS_ISS_ID 0       // 0=auto-lock; 1..8=explicit Davis transmitter ID
 #endif
 #ifndef DAVIS_RAIN_MM_PER_TIP
 #define DAVIS_RAIN_MM_PER_TIP 0.2f
 #endif
 #ifndef DAVIS_PACKET_INTERVAL_MS
 #define DAVIS_PACKET_INTERVAL_MS 2555UL
-#endif
-#ifndef DAVIS_SCAN_DWELL_MS
-#define DAVIS_SCAN_DWELL_MS 650UL
 #endif
 #ifndef DAVIS_MISS_GRACE_MS
 #define DAVIS_MISS_GRACE_MS 250UL
@@ -57,12 +60,13 @@
 #ifndef BME280_ENABLE
 #define BME280_ENABLE 1
 #endif
-#ifndef BME280_ALTITUDE_M
-#define BME280_ALTITUDE_M 584.0f
+#ifndef BME280_ALTITUDE_M_DEFAULT
+#define BME280_ALTITUDE_M_DEFAULT 0.0f
 #endif
 
+// Intentionally empty: every installation supplies its own receiver endpoint.
 #ifndef MB_DEFAULT_URL
-#define MB_DEFAULT_URL "https://meteostz05013.ddns.net/diga/mbridge/mb.php"
+#define MB_DEFAULT_URL ""
 #endif
 #ifndef MB_UPLOAD_INTERVAL_MS
 #define MB_UPLOAD_INTERVAL_MS 10000UL
@@ -80,6 +84,6 @@
 #ifndef NTP_SERVER_2
 #define NTP_SERVER_2 "time.google.com"
 #endif
-#ifndef TZ_INFO
-#define TZ_INFO "CET-1CEST,M3.5.0,M10.5.0/3"
+#ifndef TZ_INFO_DEFAULT
+#define TZ_INFO_DEFAULT "UTC0"
 #endif

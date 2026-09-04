@@ -89,6 +89,39 @@ Check the configured ISS ID, hopping continuity, miss streak and packet timing.
 
 The RF path is substantially operational. Validation can then focus on weather-field conversions and long-term continuity.
 
+## Reset levels and return to initial state
+
+Version 0.3.2-dev intentionally separates different reset scopes.
+
+### RF diagnostic reset
+
+`POST /api/rf/reset` or **Diagnostic capture 60 s** clears only the observational RF window: diagnostic counters, timing data and recent-frame history.
+
+It does not erase Wi-Fi, ISS ID, BME280, MQTT, AS3935, HTTP endpoint or persistent rain totals.
+
+### Network reset
+
+The Web **Reset network** action removes the stored Wi-Fi/network profile and restarts the gateway. On the next boot the device returns to provisioning with SSID `DavisGateway-XXXX` and portal `http://192.168.4.1`.
+
+Holding the BOOT button forces provisioning/recovery but is not a full flash erase.
+
+### MQTT / AS3935 reset
+
+Their dedicated reset actions clear only the corresponding NVS configuration.
+
+### Complete flash reset
+
+Version 0.3.2-dev does not yet provide a Web factory-reset button that erases all persistent state. To return the board to a completely blank flash, erase it with `esptool` and then flash the firmware again:
+
+```text
+python -m esptool --chip esp32 --port COMx erase_flash
+pio run -e t3-v161-868 -t upload
+```
+
+Use the corresponding PlatformIO environment for T3-S3. Replace `COMx` with the actual serial port.
+
+A full flash erase removes firmware, NVS, Wi-Fi, MQTT, AS3935, Davis/HTTP configuration and persistent state.
+
 ## API
 
 - `/api/rf`
@@ -97,5 +130,9 @@ The RF path is substantially operational. Validation can then focus on weather-f
 - `/api/diag/report`
 - `/api/system`
 - `/api/state`
+
+## Licensing and provenance
+
+The diagnostic layer is project-original material distributed under `LGPL-3.0-only` unless a file states otherwise. See `NOTICE.md`, `THIRD_PARTY_NOTICES.md` and `docs/LICENSING_EN.md`.
 
 The weather RF engine remains Davis Vantage Pro2 EU 868 MHz FHSS / 2-FSK only. Extended diagnostics do not add Oregon Scientific, Technoline/LaCrosse or 433 MHz weather decoding.

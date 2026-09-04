@@ -1,13 +1,37 @@
 # Notice
 
-ESP32 Davis Weather Gateway is an independent open-source interoperability project.
+## ESP32 Davis Weather Gateway
 
-Copyright (C) 2026 ESP32 Davis Weather Gateway contributors.
+Copyright (C) 2026 **Gianpaolo P. (`@pgpaolo`) and contributors**.
 
-Unless a file states otherwise, original project code and documentation are licensed under **GNU Lesser General Public License v3.0 only (`LGPL-3.0-only`)**. See `LICENSE` and `COPYING`.
+ESP32 Davis Weather Gateway is an independent open-source interoperability project for ESP32/LILYGO hardware and European Davis Vantage Pro2 / Pro2 Plus wireless stations.
 
-Davis Instruments, Vantage Pro2, Vantage Vue and related names or trademarks belong to their respective owners. This project is not affiliated with, endorsed by, or official documentation of Davis Instruments.
+Unless a file states otherwise, project-original source code and documentation are licensed under the **GNU Lesser General Public License v3.0 only (`LGPL-3.0-only`)**. The canonical license text is kept unmodified in `LICENSE`; `COPYING` contains the GNU GPLv3 text incorporated by LGPLv3.
 
-Protocol notes marked as reverse-engineered or requiring field validation must not be presented as official vendor specifications.
+This `NOTICE.md` is an attribution/provenance notice only. It does **not** add restrictions to, replace, or modify the terms of the GNU LGPLv3.
 
-Third-party components, historical interoperability references and their license/attribution notes are documented in `THIRD_PARTY_NOTICES.md`.
+## Attribution and redistribution
+
+When redistributing project source code, preserve applicable copyright notices, SPDX identifiers where present, the repository license information and third-party attribution notices required by the licenses of the components being redistributed.
+
+Modified versions should clearly identify substantial changes and must not be presented as an official Davis Instruments product, firmware or protocol specification.
+
+## Project provenance
+
+The Davis RF receiver/decoder in this repository is an independent ESP32/SX1276 implementation based on publicly documented interoperability facts and historical reverse-engineering references. The project does not intentionally vendor source code from DavisRFM69 or ISS-MQTT-Gateway.
+
+The Web UI, OLED, MQTT, BME280, AS3935 and diagnostic application-layer design evolved from patterns previously used in the maintainer's Oregon/Technoline gateway project. The Davis repository intentionally excludes the Oregon Scientific and Technoline/LaCrosse weather decoders and any third-party GPL-derived decoder portions associated with them.
+
+Detailed provenance and reference notes are maintained in `THIRD_PARTY_NOTICES.md` and `docs/LICENSING_IT.md` / `docs/LICENSING_EN.md`.
+
+## Trademarks and non-affiliation
+
+Davis Instruments, Vantage Pro2, Vantage Vue and related names, product identifiers and trademarks belong to their respective owners. Their use here is descriptive and solely for interoperability and technical documentation.
+
+This project is **not affiliated with, sponsored by, endorsed by, or official documentation of Davis Instruments**.
+
+Protocol notes identified as reverse-engineered, inferred or requiring field validation must not be represented as vendor specifications.
+
+## Warranty
+
+The software and documentation are provided under the warranty disclaimers contained in the GNU LGPLv3/GPLv3. Weather, RF, lightning and pressure data produced by this development firmware must be independently validated before use in safety-critical, operational or commercial decision-making.

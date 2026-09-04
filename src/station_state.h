@@ -27,7 +27,14 @@ struct StationState {
   float uv = NAN;
   float solarWm2 = NAN;
 
-  float pressureHpa = NAN;
+  // Receiver-side environmental sensor, mirroring the Davis architecture:
+  // the 6322/6322M ISS does not transmit barometric pressure.
+  float pressureHpa = NAN;          // sea-level pressure used by outputs
+  float pressureAbsoluteHpa = NAN;  // raw station pressure measured locally
+  float pressureTrendHpa3h = NAN;
+  bool pressureTrendValid = false;
+  uint16_t pressureTrendWindowMin = 0;
+  uint32_t pressureUpdatedMs = 0;
   float indoorTempC = NAN;
   float indoorHumidity = NAN;
 

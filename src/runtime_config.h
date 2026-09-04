@@ -13,7 +13,7 @@ struct RuntimeConfig {
 
   String mbUrl;
   uint32_t uploadIntervalMs = 10000UL;
-  bool tlsInsecure = true;
+  bool tlsInsecure = false;
   uint8_t issId = 0; // 0 auto, 1..8 manual
   float rainMmPerTip = 0.2f;
   float bmeAltitudeM = 0.0f;

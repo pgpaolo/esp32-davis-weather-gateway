@@ -7,7 +7,9 @@
 #include "board_config.h"
 #include "config.h"
 #include "davis_radio.h"
+#include "lightning_manager.h"
 #include "meteobridge_client.h"
+#include "mqtt_publisher.h"
 #include "network_manager.h"
 #include "pressure_manager.h"
 #include "runtime_config.h"
@@ -17,97 +19,93 @@ WebServer server(80);
 StationState *statePtr=nullptr;
 bool started=false;
 
-String esc(const String &s){
-  String o; o.reserve(s.length()+8);
-  for(size_t i=0;i<s.length();i++){
-    char c=s[i];
-    if(c=='&')o+=F("&amp;");
-    else if(c=='<')o+=F("&lt;");
-    else if(c=='>')o+=F("&gt;");
-    else if(c=='\"')o+=F("&quot;");
-    else if(c==39)o+=F("&#39;");
-    else o+=c;
-  }
-  return o;
-}
-String jf(float v,unsigned int d=1U){ return isfinite(v)?String(v,d):String("null"); }
-String hv(float v,unsigned int d=1U,const char *unit=""){ if(!isfinite(v))return "--"; return String(v,d)+unit; }
+const char DASHBOARD[] PROGMEM = R"DASH(
+<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 Davis Weather Gateway</title>
+<style>
+:root{--bg:#0b1118;--panel:#121c27;--panel2:#162433;--line:#26394b;--text:#e8f0f7;--muted:#91a6b8;--cyan:#55d7ff;--green:#68e0a0;--amber:#ffc861;--red:#ff7b7b;--blue:#7eb7ff}*{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#081018,#101b26);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}.wrap{max-width:1240px;margin:auto;padding:18px}.head{display:flex;gap:15px;align-items:center;justify-content:space-between;background:linear-gradient(120deg,#142636,#0f1c28);border:1px solid var(--line);border-radius:18px;padding:18px 20px;box-shadow:0 16px 40px #0006}.title h1{font-size:24px;margin:0 0 4px}.title small{color:var(--muted)}.chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.chip{border:1px solid var(--line);background:#0b151e;border-radius:999px;padding:7px 10px;font-size:12px}.ok{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}nav{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0}.tab{border:1px solid var(--line);background:#101a24;color:var(--muted);padding:10px 14px;border-radius:10px;cursor:pointer}.tab.active{background:#173047;color:white;border-color:#34617f}.page{display:none}.page.active{display:block}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:10px}.card,.box{background:linear-gradient(150deg,var(--panel),#0f1822);border:1px solid var(--line);border-radius:14px;padding:14px}.card .k{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}.card .v{font-size:27px;font-weight:750;margin-top:6px}.card .s{font-size:12px;color:var(--muted);margin-top:5px}.section{margin-top:13px}.section h2{font-size:16px;margin:0 0 9px;color:#cfe9fb}.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(310px,1fr));gap:12px}.kv{display:grid;grid-template-columns:1fr auto;gap:7px 12px;font-size:13px}.kv div:nth-child(odd){color:var(--muted)}fieldset{border:1px solid var(--line);border-radius:12px;margin:0;padding:13px}legend{padding:0 7px;color:var(--cyan);font-weight:700}label{display:block;color:var(--muted);font-size:12px;margin-top:8px}input,select,textarea{width:100%;margin-top:4px;background:#09131c;color:var(--text);border:1px solid #30485c;border-radius:8px;padding:9px}input[type=checkbox]{width:auto;margin-right:6px}button{background:#173d55;color:white;border:1px solid #376984;border-radius:9px;padding:9px 12px;cursor:pointer;margin:8px 5px 0 0}button:hover{background:#20516f}.danger{background:#4a2227;border-color:#7d3941}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;background:#081018;border:1px solid var(--line);padding:10px;border-radius:9px;max-height:360px;overflow:auto;font-size:12px}.note{color:var(--muted);font-size:12px;line-height:1.45}.forecast{font-size:19px;color:var(--blue);font-weight:700}@media(max-width:650px){.head{align-items:flex-start;flex-direction:column}.chips{justify-content:flex-start}.card .v{font-size:23px}}
+</style></head><body><div class="wrap">
+<div class="head"><div class="title"><h1>ESP32 Davis Weather Gateway</h1><small id="sub">Davis Vantage Pro2 EU 868 MHz FHSS</small></div><div class="chips"><span class="chip" id="cNet">NET --</span><span class="chip" id="cRf">RF --</span><span class="chip" id="cBme">BME --</span><span class="chip" id="cMqtt">MQTT --</span><span class="chip" id="cAs">AS3935 --</span></div></div>
+<nav><button class="tab active" data-page="dashboard">Dashboard</button><button class="tab" data-page="hardware">Hardware</button><button class="tab" data-page="config">Configurazione</button><button class="tab" data-page="diag">Diagnostica</button></nav>
+<section id="dashboard" class="page active"><div class="grid">
+<div class="card"><div class="k">Temperatura esterna</div><div class="v" id="temp">--</div><div class="s" id="dew">dew --</div></div>
+<div class="card"><div class="k">Umidità</div><div class="v" id="hum">--</div><div class="s">Davis ISS</div></div>
+<div class="card"><div class="k">Vento</div><div class="v" id="wind">--</div><div class="s" id="dir">dir --</div></div>
+<div class="card"><div class="k">Raffica 10 min</div><div class="v" id="gust">--</div><div class="s" id="wchill">wind chill --</div></div>
+<div class="card"><div class="k">Pioggia oggi</div><div class="v" id="rain">--</div><div class="s" id="rrate">rate --</div></div>
+<div class="card"><div class="k">Pressione</div><div class="v" id="press">--</div><div class="s" id="ptrend">trend --</div></div>
+<div class="card"><div class="k">UV</div><div class="v" id="uv">--</div><div class="s">Davis / Pro2 Plus</div></div>
+<div class="card"><div class="k">Radiazione solare</div><div class="v" id="solar">--</div><div class="s">W/m²</div></div>
+<div class="card"><div class="k">Previsione barometrica</div><div class="v forecast" id="forecast">--</div><div class="s">stima locale BME280</div></div>
+<div class="card"><div class="k">Fulmini</div><div class="v" id="lightning">--</div><div class="s" id="ldist">AS3935</div></div>
+</div>
+<div class="section cols"><div class="box"><h2>Davis RF</h2><div class="kv" id="rfSummary"></div></div><div class="box"><h2>Sensori locali</h2><div class="kv" id="sensorSummary"></div></div></div></section>
+<section id="hardware" class="page"><div class="cols"><div class="box"><h2>Ricevitore Davis 868 MHz</h2><div class="kv" id="rfHw"></div><p class="note">Il motore RF di questo progetto è esclusivamente Davis. Nessun decoder Oregon Scientific o Technoline è incluso.</p></div><div class="box"><h2>BME280 / I²C</h2><div class="kv" id="bmeHw"></div><button onclick="scanI2c()">Scansione I²C</button><div id="i2c" class="mono">Premere Scansione I²C</div></div><div class="box"><h2>AS3935 Lightning</h2><div class="kv" id="asHw"></div></div><div class="box"><h2>Rete / MQTT</h2><div class="kv" id="netHw"></div></div></div></section>
+<section id="config" class="page"><div class="cols">
+<fieldset><legend>Gateway / Davis</legend><label>Hostname<input id="host"></label><label><input type="checkbox" id="dhcp"> DHCP</label><label>IP statico<input id="ip"></label><label>Gateway<input id="gw"></label><label>Netmask<input id="mask"></label><label>DNS<input id="dns"></label><label>ID ISS (0 auto, 1..8)<input id="issid" type="number" min="0" max="8"></label><label>Rain tip mm<input id="raintip" type="number" step="0.001"></label><label>Quota BME280 m<input id="altm" type="number" step="0.1"></label><label>Timezone POSIX<input id="tz"></label><label>Endpoint mb.php<input id="mburl" placeholder="https://server.example/weather/mb.php"></label><label>Intervallo upload ms<input id="mbint" type="number"></label><label><input type="checkbox" id="tlsinsec"> HTTPS receiver senza verifica certificato</label><button onclick="saveGateway()">Salva gateway</button><button class="danger" onclick="resetNetwork()">Reset rete</button></fieldset>
+<fieldset><legend>MQTT</legend><label><input type="checkbox" id="mqEn"> Abilita MQTT</label><label>Broker<input id="mqHost"></label><label>Porta<input id="mqPort" type="number"></label><label>Username<input id="mqUser"></label><label>Nuova password<input id="mqPass" type="password" autocomplete="new-password" placeholder="vuoto = mantiene"></label><label>Client ID<input id="mqClient"></label><label>Base topic<input id="mqTopic"></label><label>TLS<select id="mqTls"><option value="0">Off</option><option value="1">TLS con CA</option><option value="2">TLS insecure</option></select></label><label>CA certificate (PEM, opzionale)<textarea id="mqCa" rows="6" placeholder="Lascia vuoto per mantenere la CA salvata"></textarea></label><label>Publish interval ms<input id="mqPeriod" type="number"></label><button onclick="saveMqtt()">Salva MQTT</button><button class="danger" onclick="resetMqtt()">Reset MQTT</button><p class="note" id="mqSecret"></p></fieldset>
+<fieldset><legend>AS3935 Lightning</legend><label><input type="checkbox" id="asEn"> Abilita AS3935</label><label><input type="checkbox" id="asIndoor"> Modalità indoor</label><label>Indirizzo I²C (1..3)<input id="asAddr" type="number" min="1" max="3"></label><label>IRQ GPIO<input id="asIrq" type="number"></label><label>Noise floor 0..7<input id="asNoise" type="number" min="0" max="7"></label><label>Watchdog 0..15<input id="asWatch" type="number" min="0" max="15"></label><label>Spike rejection 0..15<input id="asSpike" type="number" min="0" max="15"></label><label>Min strikes<select id="asMin"><option>1</option><option>5</option><option>9</option><option>16</option></select></label><label><input type="checkbox" id="asMask"> Maschera disturber</label><label>Tuning cap 0..15<input id="asCap" type="number" min="0" max="15"></label><label><input type="checkbox" id="asAuto"> Auto tuning</label><button onclick="saveAs()">Salva AS3935</button><button onclick="reinitAs()">Reinizializza</button><button class="danger" onclick="resetAs()">Reset AS3935</button></fieldset>
+<fieldset><legend>Sistema</legend><p class="note">Le password Wi-Fi e MQTT salvate non vengono restituite al browser. La Web UI è pensata per LAN fidata.</p><button onclick="testUpload()">Test upload HTTP</button><button onclick="location.href='/api/meteobridge'">Anteprima Meteobridge</button><button class="danger" onclick="restart()">Riavvia ESP32</button><div id="action" class="note"></div></fieldset>
+</div></section>
+<section id="diag" class="page"><div class="cols"><div class="box"><h2>Stato JSON</h2><div id="rawState" class="mono"></div></div><div class="box"><h2>MQTT</h2><div id="rawMqtt" class="mono"></div></div><div class="box"><h2>AS3935</h2><div id="rawAs" class="mono"></div></div><div class="box"><h2>BME280</h2><div id="rawBme" class="mono"></div></div></div></section>
+</div><script>
+const $=id=>document.getElementById(id),fmt=(v,d=1,u='')=>v==null?'--':Number(v).toFixed(d)+u;
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.page').forEach(x=>x.classList.toggle('active',x.id===b.dataset.page));if(b.dataset.page==='config')loadConfig()});
+function chip(id,ok,text){const e=$(id);e.textContent=text;e.className='chip '+(ok?'ok':'warn')}
+function kv(obj){return Object.entries(obj).map(([k,v])=>'<div>'+k+'</div><div>'+v+'</div>').join('')}
+async function refresh(){try{const s=await (await fetch('/api/state',{cache:'no-store'})).json();$('sub').textContent=s.board+' · firmware '+s.firmware+' · Davis Vantage Pro2 EU 868 MHz FHSS';chip('cNet',s.network.connected,'NET '+(s.network.connected?s.network.ip:'OFF'));chip('cRf',s.rf.synchronized,'RF '+(s.rf.synchronized?'SYNC':'SEARCH'));chip('cBme',s.bme.detected,'BME '+(s.bme.detected?'OK':'WAIT'));chip('cMqtt',s.mqtt.connected,'MQTT '+(s.mqtt.connected?'ON':(s.mqtt.enabled?'WAIT':'OFF')));chip('cAs',s.lightning.detected,'AS3935 '+(s.lightning.detected?'OK':(s.lightning.enabled?'WAIT':'OFF')));$('temp').textContent=fmt(s.weather.temperature_c,1,' °C');$('hum').textContent=fmt(s.weather.humidity_pct,0,' %');$('dew').textContent='dew '+fmt(s.weather.dewpoint_c,1,' °C');$('wind').textContent=fmt(s.weather.wind_kmh,1,' km/h');$('gust').textContent=fmt(s.weather.gust_kmh,1,' km/h');$('dir').textContent='dir '+fmt(s.weather.direction_deg,0,'°');$('wchill').textContent='wind chill '+fmt(s.weather.wind_chill_c,1,' °C');$('rain').textContent=fmt(s.weather.rain_day_mm,1,' mm');$('rrate').textContent='rate '+fmt(s.weather.rain_rate_mmh,1,' mm/h');$('press').textContent=fmt(s.bme.sea_level_hpa,1,' hPa');$('ptrend').textContent=s.bme.trend_valid?fmt(s.bme.trend_hpa_3h,1,' hPa/3h'):'trend in acquisizione';$('forecast').textContent=s.bme.forecast||'--';$('uv').textContent=fmt(s.weather.uv,1);$('solar').textContent=fmt(s.weather.solar_wm2,0);$('lightning').textContent=s.lightning.lightning_total??0;$('ldist').textContent=s.lightning.last_distance_km==null?'ultimo: -- km':'ultimo: '+s.lightning.last_distance_km+' km';$('rfSummary').innerHTML=kv({'Stato':s.rf.synchronized?'Sincronizzato':'Acquisizione','Canale':s.rf.channel,'Frequenza':Number(s.rf.frequency_mhz).toFixed(6)+' MHz','RSSI':fmt(s.rf.rssi_dbm,1,' dBm'),'ISS ID':s.rf.station_id||'auto','Pacchetti OK':s.rf.packets_ok,'CRC error':s.rf.crc_errors,'Missed':s.rf.missed,'Resync':s.rf.resyncs});$('sensorSummary').innerHTML=kv({'BME280':s.bme.detected?'0x'+Number(s.bme.address).toString(16).toUpperCase():'non rilevato','Pressione assoluta':fmt(s.bme.absolute_hpa,1,' hPa'),'T interna':fmt(s.bme.temperature_c,1,' °C'),'UR interna':fmt(s.bme.humidity_pct,0,' %'),'AS3935':s.lightning.detected?'rilevato':'non rilevato','Fulmini':s.lightning.lightning_total??0,'Ultimo evento':s.lightning.last_type||'none'});$('rfHw').innerHTML=$('rfSummary').innerHTML;$('bmeHw').innerHTML=kv({'Rilevato':s.bme.detected?'SI':'NO','Address':s.bme.address?'0x'+Number(s.bme.address).toString(16).toUpperCase():'--','Sea level':fmt(s.bme.sea_level_hpa,1,' hPa'),'Absolute':fmt(s.bme.absolute_hpa,1,' hPa'),'Trend':s.bme.trend_valid?fmt(s.bme.trend_hpa_3h,1,' hPa/3h'):'acquiring','Read errors':s.bme.read_errors});$('asHw').innerHTML=kv({'Enabled':s.lightning.enabled?'SI':'NO','Detected':s.lightning.detected?'SI':'NO','IRQ':s.lightning.irq_ok?'OK':'--','Calibration':s.lightning.calibration_ok?'OK':'CHECK','Resonance':s.lightning.resonance_hz+' Hz','Noise':s.lightning.noise_total,'Disturber':s.lightning.disturber_total,'Lightning':s.lightning.lightning_total});$('netHw').innerHTML=kv({'Wi-Fi':s.network.connected?s.network.ssid:'offline','IP':s.network.ip,'Mode':s.network.mode,'MQTT':s.mqtt.connected?'connected':(s.mqtt.enabled?'waiting':'disabled'),'HTTP upload':s.upload.successes+'/'+s.upload.attempts});$('rawState').textContent=JSON.stringify(s,null,2);$('rawMqtt').textContent=JSON.stringify(s.mqtt,null,2);$('rawAs').textContent=JSON.stringify(s.lightning,null,2);$('rawBme').textContent=JSON.stringify(s.bme,null,2);}catch(e){console.log(e)}}
+async function loadConfig(){const c=await (await fetch('/api/config',{cache:'no-store'})).json();for(const [id,k] of [['host','hostname'],['ip','static_ip'],['gw','gateway'],['mask','netmask'],['dns','dns'],['issid','iss_id'],['raintip','rain_tip_mm'],['altm','bme_altitude_m'],['tz','timezone'],['mburl','mb_url'],['mbint','upload_interval_ms']])$(id).value=c[k]??'';$('dhcp').checked=c.dhcp;$('tlsinsec').checked=c.tls_insecure;const m=await (await fetch('/api/mqtt/config')).json();$('mqEn').checked=m.enabled;$('mqHost').value=m.broker||'';$('mqPort').value=m.port;$('mqUser').value=m.user||'';$('mqClient').value=m.client_id||'';$('mqTopic').value=m.base_topic||'';$('mqTls').value=String(m.tls_mode);$('mqPeriod').value=m.publish_interval_ms;$('mqPass').value='';$('mqCa').value='';$('mqSecret').textContent='Password salvata: '+(m.has_password?'sì':'no')+' · CA salvata: '+(m.has_ca?'sì':'no');const a=await (await fetch('/api/as3935/config')).json();$('asEn').checked=a.enabled;$('asIndoor').checked=a.indoor;$('asAddr').value=a.i2c_address;$('asIrq').value=a.irq_pin;$('asNoise').value=a.noise_floor;$('asWatch').value=a.watchdog_threshold;$('asSpike').value=a.spike_rejection;$('asMin').value=String(a.min_strikes);$('asMask').checked=a.mask_disturbers;$('asCap').value=a.tuning_cap;$('asAuto').checked=a.auto_tune}
+async function post(url,p){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p.toString()});const t=await r.text();$('action').textContent=t;if(!r.ok)throw new Error(t);return t}
+async function saveGateway(){const p=new URLSearchParams({host:$('host').value,ip:$('ip').value,gw:$('gw').value,mask:$('mask').value,dns:$('dns').value,issid:$('issid').value,raintip:$('raintip').value,altm:$('altm').value,tz:$('tz').value,mburl:$('mburl').value,mbint:$('mbint').value});if($('dhcp').checked)p.set('dhcp','1');if($('tlsinsec').checked)p.set('tlsinsec','1');await post('/api/config',p);await refresh()}
+async function saveMqtt(){const p=new URLSearchParams({broker:$('mqHost').value,port:$('mqPort').value,user:$('mqUser').value,client:$('mqClient').value,topic:$('mqTopic').value,tls:$('mqTls').value,period:$('mqPeriod').value});if($('mqEn').checked)p.set('enabled','1');if($('mqPass').value){p.set('password',$('mqPass').value);p.set('replace_password','1')}if($('mqCa').value){p.set('ca',$('mqCa').value);p.set('replace_ca','1')}await post('/api/mqtt/config',p);await loadConfig();await refresh()}
+async function saveAs(){const p=new URLSearchParams({addr:$('asAddr').value,irq:$('asIrq').value,noise:$('asNoise').value,watch:$('asWatch').value,spike:$('asSpike').value,min:$('asMin').value,cap:$('asCap').value});if($('asEn').checked)p.set('enabled','1');if($('asIndoor').checked)p.set('indoor','1');if($('asMask').checked)p.set('mask','1');if($('asAuto').checked)p.set('auto','1');await post('/api/as3935/config',p);await refresh()}
+async function scanI2c(){$('i2c').textContent='scansione...';const j=await (await fetch('/api/i2c/scan')).json();$('i2c').textContent=JSON.stringify(j,null,2)}async function resetMqtt(){if(confirm('Reset configurazione MQTT?')){await post('/api/mqtt/reset',new URLSearchParams());await loadConfig()}}async function resetAs(){if(confirm('Reset AS3935?')){await post('/api/as3935/reset',new URLSearchParams());await loadConfig();await refresh()}}async function reinitAs(){await post('/api/as3935/reinit',new URLSearchParams());await refresh()}async function resetNetwork(){if(confirm('Cancellare la configurazione Wi-Fi e tornare al captive portal?'))await post('/api/network/reset',new URLSearchParams())}async function testUpload(){await post('/api/test-upload',new URLSearchParams())}async function restart(){if(confirm('Riavviare ESP32?'))await post('/api/restart',new URLSearchParams())}
+refresh();setInterval(refresh,3000);
+</script></body></html>
+)DASH";
 
-String page(){
-  const StationState &s=*statePtr;
-  const DavisRadioStatus &rf=getDavisRadioStatus();
-  const UploadStatus &up=getUploadStatus();
-  String h; h.reserve(9000);
-  h+=F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><meta http-equiv='refresh' content='15'><title>Davis Gateway</title><style>body{font-family:Arial,sans-serif;max-width:980px;margin:22px auto;padding:0 14px;color:#222}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.c{border:1px solid #ccc;border-radius:8px;padding:12px}.v{font-size:1.5em;font-weight:700}a,button{display:inline-block;margin:5px 5px 5px 0;padding:9px 12px}table{border-collapse:collapse;width:100%}td{padding:6px;border-bottom:1px solid #eee}.ok{color:#087b32}.ko{color:#a22}</style></head><body>");
-  h+=F("<h1>ESP32 Davis Weather Gateway</h1><p>"); h+=BOARD_NAME; h+=F(" - firmware "); h+=FIRMWARE_VERSION; h+=F("</p><div class='grid'>");
-  auto card=[&](const char *name,const String &value){ h+=F("<div class='c'><b>");h+=name;h+=F("</b><div class='v'>");h+=value;h+=F("</div></div>");};
-  card("Temperatura",hv(s.outTempC,1U," C")); card("Umidita",hv(s.outHumidity,0U," %")); card("Vento",hv(s.windKmh,1U," km/h")); card("Raffica 10m",hv(s.windGustKmh,1U," km/h"));
-  card("Direzione",hv(s.windDirDeg,0U," deg")); card("Pioggia oggi",hv(s.rainDayMm,1U," mm")); card("Rain rate",hv(s.rainRateMmH,1U," mm/h")); card("Pressione",hv(s.pressureHpa,1U," hPa"));
-  card("UV",hv(s.uv,1U,"")); card("Solare",hv(s.solarWm2,0U," W/m2")); card("RSSI",hv(s.rssi,1U," dBm")); card("ID ISS",s.locked?String(s.stationId+1U):String("--"));
-  h+=F("</div><h2>Stato</h2><table>");
-  h+=F("<tr><td>Rete</td><td>");h+=esc(networkModeName());h+=F(" / ");h+=esc(networkIp());h+=F("</td></tr>");
-  h+=F("<tr><td>RF</td><td>");h+=rf.synchronized?F("sincronizzato"):F("ricerca");h+=F(" - ch ");h+=String(rf.channel+1);h+=F(" - ");h+=String(rf.frequencyMhz,6);h+=F(" MHz</td></tr>");
-  h+=F("<tr><td>Pacchetti</td><td>OK ");h+=String(s.packetsOk);h+=F(" / CRC ");h+=String(s.crcErrors);h+=F(" / missed ");h+=String(s.packetsMissed);h+=F("</td></tr>");
-  h+=F("<tr><td>BME280</td><td>");h+=pressureSensorAvailable()?F("presente"):F("non rilevato");h+=F("</td></tr>");
-  h+=F("<tr><td>Upload</td><td>");h+=String(up.successes);h+=F("/");h+=String(up.attempts);h+=F(" - ");h+=esc(up.lastMessage);h+=F("</td></tr></table>");
-  h+=F("<p><a href='/config'>CONFIGURAZIONE</a><a href='/api/status'>JSON STATUS</a><a href='/api/meteobridge'>ANTEPRIMA RECORD</a></p>");
-  h+=F("</body></html>"); return h;
+String escJson(const String &s){String o;o.reserve(s.length()+8);for(size_t i=0;i<s.length();++i){char c=s[i];if(c=='\\'||c=='\"'){o+='\\';o+=c;}else if(c=='\n')o+="\\n";else if(c=='\r'){}else o+=c;}return o;}
+String jf(float v,unsigned int d=1U){return isfinite(v)?String(v,d):String("null");}
+bool validIp(const String &x){IPAddress p;return p.fromString(x);}
+
+String stateJson(){
+  const StationState&s=*statePtr;const DavisRadioStatus&rf=getDavisRadioStatus();const UploadStatus&up=getUploadStatus();const MqttRuntimeConfig mc=getMqttConfig();const MqttRuntimeStatus&ms=getMqttStatus();
+  String j;j.reserve(2600);j="{\"firmware\":\""+String(FIRMWARE_VERSION)+"\",\"board\":\""+String(BOARD_NAME)+"\"";
+  j+=",\"network\":{\"connected\":";j+=networkConnected()?"true":"false";j+=",\"ip\":\""+escJson(networkIp())+"\",\"ssid\":\""+escJson(networkSsid())+"\",\"mode\":\""+escJson(networkModeName())+"\"}";
+  j+=",\"weather\":{\"temperature_c\":"+jf(s.outTempC)+",\"humidity_pct\":"+jf(s.outHumidity,0)+",\"dewpoint_c\":"+jf(calcDewPointC(s.outTempC,s.outHumidity))+",\"wind_kmh\":"+jf(s.windKmh)+",\"gust_kmh\":"+jf(s.windGustKmh)+",\"direction_deg\":"+jf(s.windDirDeg,0)+",\"wind_chill_c\":"+jf(calcWindChillC(s.outTempC,s.windKmh))+",\"rain_rate_mmh\":"+jf(s.rainRateMmH)+",\"rain_day_mm\":"+jf(s.rainDayMm)+",\"rain_month_mm\":"+jf(s.rainMonthMm)+",\"rain_year_mm\":"+jf(s.rainYearMm)+",\"uv\":"+jf(s.uv)+",\"solar_wm2\":"+jf(s.solarWm2,0)+"}";
+  j+=",\"rf\":{\"synchronized\":";j+=rf.synchronized?"true":"false";j+=",\"channel\":"+String(rf.channel+1)+",\"frequency_mhz\":"+String(rf.frequencyMhz,6)+",\"rssi_dbm\":"+jf(s.rssi)+",\"station_id\":"+(s.locked?String(s.stationId+1):String("0"))+",\"battery_low\":";j+=s.batteryLow?"true":"false";j+=",\"packets_ok\":"+String(s.packetsOk)+",\"crc_errors\":"+String(s.crcErrors)+",\"missed\":"+String(s.packetsMissed)+",\"resyncs\":"+String(s.resyncs)+",\"last_packet_type\":\""+String(davisPacketTypeName(s.lastPacketType))+"\"}";
+  j+=",\"bme\":"+pressureStatusJson(s);j+=",\"lightning\":"+lightningStateJson();
+  j+=",\"mqtt\":{\"enabled\":";j+=mc.enabled?"true":"false";j+=",\"connected\":";j+=ms.connected?"true":"false";j+=",\"broker\":\""+escJson(mc.broker)+"\",\"tls\":\""+String(mqttTlsModeName(mc.tlsMode))+"\",\"connect_attempts\":"+String(ms.connectAttempts)+",\"publishes\":"+String(ms.publishes)+",\"last_error\":\""+escJson(ms.lastError)+"\"}";
+  j+=",\"upload\":{\"attempts\":"+String(up.attempts)+",\"successes\":"+String(up.successes)+",\"last_message\":\""+escJson(up.lastMessage)+"\"}}";return j;
 }
 
-String configPage(const String &msg=String()){
-  String h; h.reserve(7800);
-  h+=F("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>Configurazione</title><style>body{font-family:Arial,sans-serif;max-width:760px;margin:24px auto;padding:0 14px}fieldset{margin:14px 0;padding:14px}label{display:block;margin-top:10px;font-weight:600}input{box-sizing:border-box;width:100%;padding:8px}input[type=checkbox]{width:auto}button{padding:10px 15px}.msg{background:#eef6ee;padding:8px}small{color:#666}</style></head><body><h1>Configurazione</h1>");
-  if(!msg.isEmpty()){h+=F("<p class='msg'>");h+=esc(msg);h+=F("</p>");}
-  h+=F("<form method='POST' action='/save'><fieldset><legend>Rete</legend><label>SSID</label><input name='ssid' value='");h+=esc(runtimeConfig.wifiSsid);h+=F("'><label>Nuova password Wi-Fi</label><input type='password' name='pass' autocomplete='new-password' placeholder='vuoto = mantiene quella esistente'><small>La password salvata non viene mai inviata al browser.</small><label><input type='checkbox' name='clearpass' value='1'> Cancella password / rete Wi-Fi aperta</label><label>Hostname</label><input name='host' value='");h+=esc(runtimeConfig.hostname);h+=F("'><label><input type='checkbox' name='dhcp' value='1' ");if(runtimeConfig.useDhcp)h+=F("checked");h+=F("> DHCP</label><label>IP statico</label><input name='ip' value='");h+=esc(runtimeConfig.staticIp);h+=F("'><label>Gateway</label><input name='gw' value='");h+=esc(runtimeConfig.gateway);h+=F("'><label>Netmask</label><input name='mask' value='");h+=esc(runtimeConfig.netmask);h+=F("'><label>DNS</label><input name='dns' value='");h+=esc(runtimeConfig.dns);h+=F("'></fieldset>");
-  h+=F("<fieldset><legend>Davis / sensori</legend><label>ID ISS (0=auto)</label><input type='number' min='0' max='8' name='issid' value='");h+=String(runtimeConfig.issId);h+=F("'><label>Rain tip mm</label><input type='number' step='0.001' min='0.05' max='1' name='raintip' value='");h+=String(runtimeConfig.rainMmPerTip,3);h+=F("'><label>Quota BME280 m</label><input type='number' step='0.1' min='-500' max='9000' name='altm' value='");h+=String(runtimeConfig.bmeAltitudeM,1);h+=F("'><label>Timezone POSIX</label><input name='tz' value='");h+=esc(runtimeConfig.tzInfo);h+=F("'></fieldset>");
-  h+=F("<fieldset><legend>Upload HTTP</legend><label>Endpoint receiver</label><input name='mburl' placeholder='https://server.example/path/mb.php' value='");h+=esc(runtimeConfig.mbUrl);h+=F("'><label>Intervallo ms</label><input type='number' min='5000' max='300000' name='mbint' value='");h+=String(runtimeConfig.uploadIntervalMs);h+=F("'><label><input type='checkbox' name='tlsinsec' value='1' ");if(runtimeConfig.tlsInsecure)h+=F("checked");h+=F("> HTTPS senza verifica certificato</label></fieldset><button>SALVA E RIAVVIA</button></form>");
-  h+=F("<form method='POST' action='/test-upload'><button>TEST UPLOAD</button></form><form method='POST' action='/reset-network' onsubmit=\"return confirm('Cancellare la configurazione Wi-Fi?')\"><button>RESET RETE / PORTALE SETUP</button></form><p><a href='/'>Torna alla dashboard</a></p></body></html>"); return h;
-}
-
-bool validIp(const String &x){ IPAddress p; return p.fromString(x); }
-}
+String configJson(){String j;j.reserve(850);j="{\"hostname\":\""+escJson(runtimeConfig.hostname)+"\",\"dhcp\":";j+=runtimeConfig.useDhcp?"true":"false";j+=",\"static_ip\":\""+escJson(runtimeConfig.staticIp)+"\",\"gateway\":\""+escJson(runtimeConfig.gateway)+"\",\"netmask\":\""+escJson(runtimeConfig.netmask)+"\",\"dns\":\""+escJson(runtimeConfig.dns)+"\",\"iss_id\":"+String(runtimeConfig.issId)+",\"rain_tip_mm\":"+String(runtimeConfig.rainMmPerTip,3)+",\"bme_altitude_m\":"+String(runtimeConfig.bmeAltitudeM,1)+",\"timezone\":\""+escJson(runtimeConfig.tzInfo)+"\",\"mb_url\":\""+escJson(runtimeConfig.mbUrl)+"\",\"upload_interval_ms\":"+String(runtimeConfig.uploadIntervalMs)+",\"tls_insecure\":";j+=runtimeConfig.tlsInsecure?"true":"false";j+="}";return j;}
+} // namespace
 
 void initWeb(StationState &station){
-  if(started) return;
-  statePtr=&station;
-  server.on("/",HTTP_GET,[]{server.send(200,"text/html; charset=utf-8",page());});
-  server.on("/config",HTTP_GET,[]{server.send(200,"text/html; charset=utf-8",configPage());});
-  server.on("/save",HTTP_POST,[]{
-    String ssid=server.arg("ssid"); if(ssid.isEmpty()){server.send(400,"text/html; charset=utf-8",configPage("SSID obbligatorio"));return;}
-    const String previousSsid=runtimeConfig.wifiSsid;
-    const String submittedPassword=server.arg("pass");
-    const bool clearPassword=server.hasArg("clearpass");
-    runtimeConfig.wifiSsid=ssid;
-    if(clearPassword) runtimeConfig.wifiPassword="";
-    else if(!submittedPassword.isEmpty()) runtimeConfig.wifiPassword=submittedPassword;
-    else if(ssid!=previousSsid) runtimeConfig.wifiPassword="";
-    runtimeConfig.hostname=server.arg("host"); if(runtimeConfig.hostname.isEmpty())runtimeConfig.hostname=DEVICE_HOSTNAME_DEFAULT;
-    runtimeConfig.useDhcp=server.hasArg("dhcp");
-    runtimeConfig.staticIp=server.arg("ip"); runtimeConfig.gateway=server.arg("gw"); runtimeConfig.netmask=server.arg("mask"); runtimeConfig.dns=server.arg("dns");
-    if(!runtimeConfig.useDhcp && (!validIp(runtimeConfig.staticIp)||!validIp(runtimeConfig.gateway)||!validIp(runtimeConfig.netmask)||!validIp(runtimeConfig.dns))){server.send(400,"text/html; charset=utf-8",configPage("Profilo IP statico non valido"));return;}
-    runtimeConfig.issId=(uint8_t)constrain(server.arg("issid").toInt(),0,8);
-    float tip=server.arg("raintip").toFloat();if(tip>=0.05f&&tip<=1.0f)runtimeConfig.rainMmPerTip=tip;
-    float alt=server.arg("altm").toFloat();if(alt>=-500&&alt<=9000)runtimeConfig.bmeAltitudeM=alt;
-    runtimeConfig.tzInfo=server.arg("tz");if(runtimeConfig.tzInfo.isEmpty())runtimeConfig.tzInfo=TZ_INFO_DEFAULT;
-    runtimeConfig.mbUrl=server.arg("mburl");
-    uint32_t iv=(uint32_t)server.arg("mbint").toInt();runtimeConfig.uploadIntervalMs=constrain(iv,5000UL,300000UL);
-    runtimeConfig.tlsInsecure=server.hasArg("tlsinsec");saveRuntimeConfig();
-    server.send(200,"text/html; charset=utf-8","<html><body><h2>Salvato. Riavvio...</h2></body></html>");delay(700);ESP.restart();
-  });
-  server.on("/test-upload",HTTP_POST,[]{bool ok=sendWeatherRecordNow(*statePtr);String m;if(ok)m="Upload riuscito";else{m="Upload fallito: ";m+=getUploadStatus().lastMessage;}server.send(ok?200:502,"text/html; charset=utf-8",configPage(m));});
-  server.on("/reset-network",HTTP_POST,[]{clearRuntimeWifiConfig();server.send(200,"text/html; charset=utf-8","<html><body><h2>Rete cancellata. Riavvio nel portale setup...</h2></body></html>");delay(700);ESP.restart();});
+  if(started)return;statePtr=&station;
+  server.on("/",HTTP_GET,[]{server.send_P(200,"text/html; charset=utf-8",DASHBOARD);});
+  server.on("/config",HTTP_GET,[]{server.sendHeader("Location","/#config",true);server.send(302,"text/plain","");});
+  server.on("/api/state",HTTP_GET,[]{server.send(200,"application/json",stateJson());});
+  server.on("/api/status",HTTP_GET,[]{server.send(200,"application/json",stateJson());});
+  server.on("/api/bme",HTTP_GET,[]{server.send(200,"application/json",pressureStatusJson(*statePtr));});
+  server.on("/api/i2c/scan",HTTP_GET,[]{server.send(200,"application/json",i2cScanJson());});
+  server.on("/api/as3935/state",HTTP_GET,[]{server.send(200,"application/json",lightningStateJson());});
+  server.on("/api/as3935/config",HTTP_GET,[]{server.send(200,"application/json",lightningConfigJson());});
+  server.on("/api/mqtt/config",HTTP_GET,[]{server.send(200,"application/json",mqttConfigJson());});
+  server.on("/api/mqtt/status",HTTP_GET,[]{server.send(200,"application/json",mqttStatusJson());});
+  server.on("/api/config",HTTP_GET,[]{server.send(200,"application/json",configJson());});
   server.on("/api/meteobridge",HTTP_GET,[]{server.send(200,"text/plain; charset=utf-8",buildMeteobridgeCompatibleRecord(*statePtr));});
-  server.on("/api/status",HTTP_GET,[]{
-    const StationState&s=*statePtr;const DavisRadioStatus&rf=getDavisRadioStatus();String j="{";
-    j+="\"firmware\":\""+String(FIRMWARE_VERSION)+"\",\"network\":\""+networkModeName()+"\",\"ip\":\""+networkIp()+"\",";
-    j+="\"rf_sync\":"+String(rf.synchronized?"true":"false")+",\"channel\":"+String(rf.channel+1)+",\"frequency_mhz\":"+String(rf.frequencyMhz,6)+",";
-    j+="\"temp_c\":"+jf(s.outTempC)+",\"humidity\":"+jf(s.outHumidity,0U)+",\"wind_kmh\":"+jf(s.windKmh)+",\"gust_kmh\":"+jf(s.windGustKmh)+",";
-    j+="\"wind_dir\":"+jf(s.windDirDeg,0U)+",\"rain_day_mm\":"+jf(s.rainDayMm)+",\"rain_rate_mmh\":"+jf(s.rainRateMmH)+",\"pressure_hpa\":"+jf(s.pressureHpa)+",";
-    j+="\"uv\":"+jf(s.uv)+",\"solar_wm2\":"+jf(s.solarWm2,0U)+",\"rssi\":"+jf(s.rssi)+",\"packets_ok\":"+String(s.packetsOk)+",\"crc_errors\":"+String(s.crcErrors)+"}";
-    server.send(200,"application/json",j);
-  });
-  server.onNotFound([](){server.send(404,"text/plain","Not found");});
-  server.begin();started=true;
+  server.on("/api/config",HTTP_POST,[]{runtimeConfig.hostname=server.arg("host");if(runtimeConfig.hostname.isEmpty())runtimeConfig.hostname=DEVICE_HOSTNAME_DEFAULT;runtimeConfig.useDhcp=server.hasArg("dhcp");runtimeConfig.staticIp=server.arg("ip");runtimeConfig.gateway=server.arg("gw");runtimeConfig.netmask=server.arg("mask");runtimeConfig.dns=server.arg("dns");if(!runtimeConfig.useDhcp&&(!validIp(runtimeConfig.staticIp)||!validIp(runtimeConfig.gateway)||!validIp(runtimeConfig.netmask)||!validIp(runtimeConfig.dns))){server.send(400,"text/plain","Profilo IP statico non valido");return;}runtimeConfig.issId=(uint8_t)constrain(server.arg("issid").toInt(),0,8);const float tip=server.arg("raintip").toFloat();if(tip>=0.05f&&tip<=1.0f)runtimeConfig.rainMmPerTip=tip;const float alt=server.arg("altm").toFloat();if(alt>=-500&&alt<=9000)runtimeConfig.bmeAltitudeM=alt;runtimeConfig.tzInfo=server.arg("tz");if(runtimeConfig.tzInfo.isEmpty())runtimeConfig.tzInfo=TZ_INFO_DEFAULT;runtimeConfig.mbUrl=server.arg("mburl");uint32_t iv=(uint32_t)server.arg("mbint").toInt();runtimeConfig.uploadIntervalMs=constrain(iv,5000UL,300000UL);runtimeConfig.tlsInsecure=server.hasArg("tlsinsec");saveRuntimeConfig();server.send(200,"text/plain","Configurazione gateway salvata. Riavviare se sono cambiati i parametri di rete.");});
+  server.on("/api/mqtt/config",HTTP_POST,[]{MqttRuntimeConfig c=getMqttConfig();c.enabled=server.hasArg("enabled");c.broker=server.arg("broker");c.port=(uint16_t)server.arg("port").toInt();c.user=server.arg("user");c.clientId=server.arg("client");c.baseTopic=server.arg("topic");c.tlsMode=(MqttTlsMode)constrain(server.arg("tls").toInt(),0,2);c.publishIntervalMs=(uint32_t)server.arg("period").toInt();const bool rp=server.hasArg("replace_password");const bool rc=server.hasArg("replace_ca");if(rp)c.password=server.arg("password");if(rc)c.caCertificate=server.arg("ca");if(!saveMqttConfig(c,rp,rc)){server.send(400,"text/plain","Configurazione MQTT non valida");return;}server.send(200,"text/plain","Configurazione MQTT salvata");});
+  server.on("/api/mqtt/reset",HTTP_POST,[]{const bool ok=resetMqttConfig();server.send(ok?200:500,"text/plain",ok?"MQTT reset":"MQTT reset fallito");});
+  server.on("/api/as3935/config",HTTP_POST,[]{LightningConfig c=getLightningConfig();c.enabled=server.hasArg("enabled");c.indoor=server.hasArg("indoor");c.i2cAddress=(uint8_t)server.arg("addr").toInt();c.irqPin=(int8_t)server.arg("irq").toInt();c.noiseFloor=(uint8_t)server.arg("noise").toInt();c.watchdogThreshold=(uint8_t)server.arg("watch").toInt();c.spikeRejection=(uint8_t)server.arg("spike").toInt();c.minStrikes=(uint8_t)server.arg("min").toInt();c.maskDisturbers=server.hasArg("mask");c.tuningCap=(uint8_t)server.arg("cap").toInt();c.autoTune=server.hasArg("auto");if(!saveLightningConfig(c)){server.send(400,"text/plain","Configurazione AS3935 non valida o sensore non disponibile");return;}server.send(200,"text/plain","Configurazione AS3935 salvata");});
+  server.on("/api/as3935/reinit",HTTP_POST,[]{const bool ok=reinitializeLightning();server.send(ok?200:503,"text/plain",ok?"AS3935 reinizializzato":"AS3935 non disponibile");});
+  server.on("/api/as3935/reset",HTTP_POST,[]{const bool ok=resetLightningConfig();server.send(ok?200:500,"text/plain",ok?"AS3935 reset":"AS3935 reset fallito");});
+  server.on("/api/test-upload",HTTP_POST,[]{const bool ok=sendWeatherRecordNow(*statePtr);server.send(ok?200:502,"text/plain",ok?"Upload riuscito":getUploadStatus().lastMessage);});
+  server.on("/api/network/reset",HTTP_POST,[]{clearRuntimeWifiConfig();server.send(200,"text/plain","Rete cancellata. Riavvio...");delay(500);ESP.restart();});
+  server.on("/api/restart",HTTP_POST,[]{server.send(200,"text/plain","Riavvio...");delay(400);ESP.restart();});
+  server.onNotFound([](){server.send(404,"text/plain","Not found");});server.begin();started=true;
 }
 
 void serviceWeb(){if(started)server.handleClient();}

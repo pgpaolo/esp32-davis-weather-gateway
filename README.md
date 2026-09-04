@@ -7,13 +7,13 @@
 
 Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis Vantage Pro2 / Pro2 Plus wireless europea**, senza console Davis e senza Meteobridge.
 
-> **Confine architetturale:** il motore radio resta esclusivamente **DAVIS Vantage Pro2 EU 868 MHz FHSS / 2-FSK**. L'evoluzione `0.3.x` porta sul progetto Davis l'interfaccia e i servizi applicativi maturati nel progetto Oregon/Technoline 6.4, ma **non importa decoder, parser o modalità RF Oregon Scientific / Technoline**.
+> **Confine architetturale:** il motore radio resta esclusivamente **DAVIS Vantage Pro2 EU 868 MHz FHSS / 2-FSK**. Web UI, OLED, MQTT, BME280 e AS3935 sono servizi applicativi e non introducono decoder Oregon Scientific, Technoline/LaCrosse o modalità meteo RF 433 MHz.
 
-`develop` è il branch di integrazione attivo. `main` contiene stati revisionati e validati tramite Pull Request e CI.
+`develop` è il branch di integrazione attivo. `main` contiene stati revisionati e promossi tramite Pull Request con CI verde.
 
 ## Stato del progetto
 
-Versione di sviluppo corrente: **`0.3.0-dev`**.
+Versione di sviluppo corrente: **`0.3.1-dev`**.
 
 La CI compila entrambi i target LILYGO supportati. Il decoder RF Davis continua a richiedere validazione sul campo contro una ISS reale prima di dichiarare una release stabile.
 
@@ -21,13 +21,14 @@ La CI compila entrambi i target LILYGO supportati. Il decoder RF Davis continua 
 
 - LILYGO / TTGO LoRa32 T3 V1.6.1 con **SX1276/RFM95 868 MHz**
 - LILYGO T3-S3 + SX1276/RFM95 868 MHz
+- OLED integrato **SSD1306 128x64 I2C, 0x3C**
 - Davis Vantage Pro2 / Pro2 Plus wireless EU ISS
-- **BME280** I²C sul gateway per barometro e T/H locale
-- **AS3935** I²C opzionale per rilevamento fulmini
+- **BME280** I2C per barometro lato ricevitore e T/H locale
+- **AS3935** I2C opzionale per rilevamento fulmini
 
-Una radio destinata esclusivamente a 433 MHz non è adatta: il ricevitore Davis usa hardware per la banda europea 868 MHz.
+Il bus I2C condiviso OLED/BME280/AS3935 viene mantenuto a **100 kHz** per aumentare il margine di affidabilità.
 
-## Architettura 0.3
+## Architettura
 
 ```text
 Davis ISS EU 868 MHz FHSS
@@ -39,6 +40,7 @@ Davis ISS EU 868 MHz FHSS
        ESP32
           |
           +-- Davis decoder / FHSS   <-- unico motore RF meteo
+          +-- OLED 128x64            <-- dati + ricerca/diagnostica live
           +-- BME280                 <-- barometro lato ricevitore
           +-- AS3935                 <-- fulmini, I2C + IRQ
           +-- Web UI / diagnostica
@@ -47,29 +49,43 @@ Davis ISS EU 868 MHz FHSS
           +-- NVS / provisioning Wi-Fi
 ```
 
-La priorità del loop resta assegnata a `serviceDavisRadio()`: MQTT, Web, BME280 e AS3935 sono servizi ausiliari e non cambiano modulazione, hop table o decoder Davis.
+`serviceDavisRadio()` conserva la prima priorità nel loop. Il display viene aggiornato dopo il percorso RF e non modifica hopping, modulazione o decoder.
+
+## OLED e diagnostica durante la ricerca
+
+Il display integrato viene inizializzato all'avvio e mostra l'avanzamento di boot: configurazione/NVS, rete, BME280, AS3935/MQTT e inizializzazione radio Davis.
+
+Finché non viene acquisito un pacchetto Davis valido e il ricevitore non è sincronizzato, l'OLED resta sulla pagina **DAVIS SEARCH** e mostra in tempo reale:
+
+- canale FHSS e frequenza corrente
+- filtro ISS `AUTO` oppure ID configurato
+- RSSI quando disponibile
+- pacchetti validi, errori CRC e pacchetti mancati
+- stato BME280 e AS3935
+- IP Web oppure IP del captive portal/recovery
+
+Dopo il lock RF il display ruota automaticamente, circa ogni 6,5 s, tra:
+
+1. dati meteo Davis
+2. vento e pioggia
+3. barometro BME280, trend e previsione
+4. diagnostica RF Davis/FHSS
+5. AS3935 fulmini
+6. stato gateway, Wi-Fi, MQTT, heap e uptime
+
+Se il flusso Davis diventa stale per circa 12 s o si perde la sincronizzazione, il display torna automaticamente alla schermata **DAVIS SEARCH**. Se l'SX1276 non si inizializza compare invece **DAVIS RF ERROR** con il codice RadioLib.
+
+Vedere [docs/OLED_DISPLAY.md](docs/OLED_DISPLAY.md).
 
 ## Dati meteo
 
-Dalla Davis ISS:
+Dalla Davis ISS: temperatura/umidità esterne, vento, direzione, raffica, pioggia/rain rate, UV, radiazione solare e flag batteria trasmettitore.
 
-- temperatura e umidità esterne
-- velocità e direzione vento
-- raffica 10 minuti
-- pioggia e rain rate
-- UV e radiazione solare quando disponibili
-- stato batteria trasmettitore
-
-Dal gateway:
-
-- pressione BME280 assoluta e ridotta al livello del mare
-- temperatura/umidità locale BME280
-- trend barometrico e previsione locale indicativa
-- eventi AS3935: lightning, disturber, noise, distanza ed energia
+Dal gateway: pressione BME280 assoluta e ridotta al livello del mare, T/H locale, trend barometrico, previsione indicativa e dati/eventi AS3935.
 
 ### Pressione Davis
 
-Per la **Vantage Pro2 Sensor Suite 6322/6322M** il barometro non è nell'ISS esterna. Nell'ecosistema Davis la misura barometrica è lato ricevente; questo gateway replica la stessa separazione con un BME280 locale. Il nuovo manager BME280 gestisce indirizzi `0x76/0x77`, rediscovery non bloccante, pressione assoluta/sea-level, trend e diagnostica I²C.
+Per la **Vantage Pro2 Sensor Suite 6322/6322M** il barometro non è nell'ISS esterna. Nell'ecosistema Davis la misura barometrica è lato ricevente; il gateway segue la stessa architettura usando un BME280 locale.
 
 ## RF Davis EU
 
@@ -83,76 +99,29 @@ Hop set EU implementato:
 4. 868.181885 MHz
 5. 868.412292 MHz
 
-**Non sono presenti** `oregon_receiver`, decoder Oregon Scientific, decoder Technoline/LaCrosse o modalità RF 433 MHz.
+**Non sono presenti** `oregon_receiver`, decoder Oregon Scientific, decoder Technoline/LaCrosse o modalità RF meteo 433 MHz.
 
-## Web UI
+## Web UI e diagnostica
 
-La dashboard `0.3.0-dev` adotta una grafica dark/tabbed coerente con il progetto 6.4 di riferimento, adattata ai dati Davis. Le sezioni sono:
+La dashboard dark/tabbed espone Dashboard, Hardware, Configurazione e Diagnostica, con stato **NET / RF / BME / MQTT / AS3935** e API JSON dedicate.
 
-- **Dashboard**: valori meteo, barometro, previsione e fulmini
-- **Hardware**: Davis RF/FHSS, BME280/I²C, AS3935, rete e MQTT
-- **Configurazione**: gateway/Davis, HTTP, MQTT e AS3935
-- **Diagnostica**: JSON live dei sottosistemi
+API principali: `/api/state`, `/api/status`, `/api/bme`, `/api/i2c/scan`, `/api/as3935/state`, `/api/as3935/config`, `/api/mqtt/status`, `/api/mqtt/config`, `/api/config`, `/api/meteobridge`.
 
-Indicatori rapidi mostrano stato **NET / RF / BME / MQTT / AS3935**.
+La Web UI è destinata a una **LAN fidata** e non deve essere esposta direttamente su Internet senza autenticazione/proxy appropriato.
 
-API principali:
+## MQTT e AS3935
 
-- `/api/state` e `/api/status` - stato aggregato
-- `/api/bme` - BME280/trend
-- `/api/i2c/scan` - scansione I²C on-demand
-- `/api/as3935/state` e `/api/as3935/config`
-- `/api/mqtt/status` e `/api/mqtt/config`
-- `/api/config` - configurazione gateway
-- `/api/meteobridge` - anteprima record
+MQTT è disabilitato di default e supporta plain MQTT, TLS con CA verificata e insecure TLS solo come opt-in esplicito. AS3935 è opzionale e configurabile via Web/NVS. Sul T3 V1.6.1 il default usa `0x03` e IRQ GPIO34; sul T3-S3 resta disabilitato di default finché non viene validato un GPIO IRQ libero.
 
-La UI è destinata a una **LAN fidata** e non deve essere pubblicata direttamente su Internet senza autenticazione/proxy appropriato.
-
-## AS3935 Lightning
-
-Il sensore fulmini è opzionale e configurabile da Web UI/NVS: ambiente indoor/outdoor, address I²C, IRQ GPIO, noise floor, watchdog, spike rejection, minimo numero di strike, mask disturber, tuning capacitor e autotune.
-
-Sul profilo **T3 V1.6.1** il default è address `0x03`, IRQ **GPIO34**. Sul profilo **T3-S3** AS3935 è volutamente **disabilitato di default** finché non viene scelto e verificato un GPIO IRQ libero sulla revisione hardware utilizzata.
-
-Vedere [docs/AS3935.md](docs/AS3935.md).
-
-## MQTT
-
-MQTT è **disabilitato di default** ed è completamente configurabile dalla Web UI. Supporta:
-
-- broker/porta
-- username/password
-- client ID e base topic
-- intervallo pubblicazione
-- MQTT non cifrato
-- TLS con CA verificata
-- TLS insecure, solo come scelta esplicita dell'installatore
-
-La password MQTT e la CA memorizzate non vengono restituite al browser. Sono pubblicati topic per weather, BME, Davis RF, system e AS3935, oltre a uno snapshot JSON `state`.
-
-Vedere [docs/MQTT.md](docs/MQTT.md).
+Vedere [docs/MQTT.md](docs/MQTT.md) e [docs/AS3935.md](docs/AS3935.md).
 
 ## Primo avvio e Wi-Fi
 
-SSID e password non vengono inseriti nel sorgente pubblico. Se non esiste una configurazione valida il gateway crea l'AP temporaneo:
-
-```text
-DavisGateway-XXXX
-```
-
-Captive portal: `http://192.168.4.1`.
-
-DHCP è il default; il profilo statico proposto usa `192.168.1.120` come semplice valore suggerito. Dopo 60 secondi senza rete viene attivato il recovery portal. La configurazione è salvata in NVS e le password memorizzate non vengono renderizzate nuovamente nella Web UI.
+Se non esiste una configurazione valida il gateway crea `DavisGateway-XXXX` e apre il captive portal su `http://192.168.4.1`. DHCP è il default; `192.168.1.120` è solo il profilo statico suggerito. Dopo 60 s senza rete viene attivato il recovery portal.
 
 ## HTTP / mb.php
 
-Il firmware pubblico non contiene endpoint specifici dell'installazione. Ogni utente configura il proprio URL receiver, ad esempio:
-
-```text
-https://server.example/weather/mb.php
-```
-
-Il gateway aggiunge `?d=<record Meteobridge/Weather34 URL-encoded>`. HTTPS verifica il certificato per default; la modalità insecure richiede opt-in esplicito.
+Il firmware pubblico non contiene endpoint specifici. Ogni installazione configura il proprio receiver; HTTPS verifica il certificato per default e la modalità insecure richiede opt-in esplicito.
 
 ## Build PlatformIO
 
@@ -161,30 +130,19 @@ pio run -e t3-v161-868
 pio run -e t3-s3-868
 ```
 
-La CI `0.3.0-dev` ha compilato con successo entrambe le board dopo l'integrazione Web/MQTT/BME/AS3935. Le dipendenze principali restano versionate/pinnate in `platformio.ini`.
+La CI `0.3.1-dev` compila entrambe le board con OLED/U8g2, Web, MQTT, BME280 e AS3935. Sul T3 V1.6.1 la build OLED usa circa **54,3 kB RAM** e **1,169 MB flash** nella partizione applicativa corrente.
 
 ## Documentazione
 
+- [OLED display e ricerca Davis](docs/OLED_DISPLAY.md)
 - [Architettura applicativa 0.3](docs/ARCHITECTURE_0.3.md)
 - [MQTT](docs/MQTT.md)
 - [AS3935 Lightning](docs/AS3935.md)
 - [Note protocollo RF - Italiano](docs/RF_PROTOCOL_IT.md)
 - [RF protocol notes - English](docs/RF_PROTOCOL_EN.md)
-- [Guida RF Davis PDF italiano v1.1](docs/Davis_RF_Protocol_Guide_IT_v1.1.pdf)
-- [Davis RF guide English PDF v1.1](docs/Davis_RF_Protocol_Guide_EN_v1.1.pdf)
 
-La documentazione del protocollo è indipendente e basata su implementazione/interoperabilità/reverse engineering pubblico; non è una specifica ufficiale Davis Instruments.
+La documentazione RF è indipendente e basata su interoperabilità/reverse engineering pubblico; non è una specifica ufficiale Davis Instruments.
 
-## Sicurezza
+## Sicurezza, branch e licenza
 
-Vedere [SECURITY.md](SECURITY.md). Il repository pubblico non deve contenere password, token, chiavi private, CA private o endpoint personali. MQTT e HTTP TLS sono secure-by-default dove applicabile; le modalità insecure sono esplicite.
-
-## Branch e contributi
-
-Vedere [CONTRIBUTING.md](CONTRIBUTING.md). Lo sviluppo ordinario avviene su `develop`; la promozione a `main` avviene esclusivamente via Pull Request con CI verde.
-
-## Licenza
-
-Il codice e la documentazione originali del progetto sono distribuiti sotto **GNU Lesser General Public License v3.0 only (`LGPL-3.0-only`)**, salvo diversa indicazione nel singolo file. Le dipendenze mantengono le proprie licenze.
-
-Vedere [LICENSE](LICENSE), [COPYING](COPYING) e [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Vedere [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) e [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md). Il codice e la documentazione originali sono distribuiti sotto **GNU LGPL v3.0 only (`LGPL-3.0-only`)**, salvo diversa indicazione.

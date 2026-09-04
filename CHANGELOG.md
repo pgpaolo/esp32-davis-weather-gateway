@@ -9,6 +9,31 @@ The project follows a development-first branch model. Versions marked `-dev` are
 - Continue real-hardware validation of Davis FHSS decoding and weather conversions.
 - Select/validate a safe AS3935 IRQ GPIO for each supported T3-S3 hardware revision before enabling lightning support by default on that target.
 
+## [0.3.1-dev] - 2026-09-04
+
+### Added
+
+- SSD1306 128x64 OLED support through pinned U8g2.
+- Boot-stage visualization for NVS/configuration, network, BME280, AS3935/MQTT and Davis radio initialization.
+- Live **DAVIS SEARCH** diagnostics while the receiver is acquiring or re-acquiring the ISS.
+- Search display with FHSS channel/frequency, configured ISS filter, RSSI, valid/CRC/missed counters, BME280/AS3935 status and network address.
+- Six-page runtime display cycle for Davis weather, wind/rain, barometer, Davis RF/FHSS, AS3935 and gateway/system state.
+- Automatic return to the search page when Davis traffic becomes stale or synchronization is lost.
+- **DAVIS RF ERROR** screen with RadioLib error code when SX1276 initialization fails.
+- OLED documentation in `docs/OLED_DISPLAY.md`.
+
+### Changed
+
+- Firmware version advanced to `0.3.1-dev`.
+- Shared OLED/BME280/AS3935 I2C bus is kept at 100 kHz.
+- OLED refresh is serviced after the Davis RF path so display work never takes priority over packet reception.
+
+### Validation
+
+- `t3-v161-868`: CI build successful with U8g2/OLED support.
+- `t3-s3-868`: CI build successful with U8g2/OLED support.
+- T3 V1.6.1 build: 54,296 bytes RAM (16.6%) and 1,168,617 bytes flash (89.2%) in the current application partition.
+
 ## [0.3.0-dev] - 2026-09-04
 
 ### Added

@@ -3,6 +3,7 @@
 #include "board_config.h"
 #include "config.h"
 #include "davis_radio.h"
+#include "display_manager.h"
 #include "lightning_manager.h"
 #include "meteobridge_client.h"
 #include "mqtt_publisher.h"
@@ -22,14 +23,31 @@ void setup(){
   Serial.print(F(" ESP32 Davis Weather Gateway "));Serial.println(FIRMWARE_VERSION);
   Serial.print(F(" Board: "));Serial.println(BOARD_NAME);
   Serial.println(F(" RF engine: DAVIS ONLY - Vantage Pro2 EU 868 MHz FHSS / 2-FSK"));
-  Serial.println(F(" Services: BME280 + AS3935 + MQTT + Web UI + HTTP upload"));
+  Serial.println(F(" Services: OLED + BME280 + AS3935 + MQTT + Web UI + HTTP upload"));
   Serial.println(F("========================================"));
 
   pinMode(BOARD_LED_PIN,OUTPUT);digitalWrite(BOARD_LED_PIN,BOARD_LED_OFF);
-  loadRuntimeConfig();initRainPersistence(station);initNetwork();
-  const bool bmeOk=initPressureSensor();Serial.print(F("[BME] "));Serial.println(bmeOk?F("ready"):F("retry mode"));
-  initLightning();initMqtt();
-  const bool rfOk=initDavisRadio();Serial.print(F("[RF] "));Serial.println(rfOk?F("ready"):F("initialization failed"));
+
+  loadRuntimeConfig();
+  const bool oledOk=initDisplay();
+  Serial.print(F("[OLED] "));Serial.println(oledOk?F("ready"):F("not detected/disabled"));
+  displayBootMessage("Configurazione caricata","Rete / NVS...");
+
+  initRainPersistence(station);
+  initNetwork();
+  displayBootMessage("Rete inizializzata","BME280...");
+
+  const bool bmeOk=initPressureSensor();
+  Serial.print(F("[BME] "));Serial.println(bmeOk?F("ready"):F("retry mode"));
+  displayBootMessage(bmeOk?"BME280 OK":"BME280 retry","AS3935 / MQTT...");
+
+  initLightning();
+  initMqtt();
+  displayBootMessage("Servizi locali OK","Radio Davis 868...");
+
+  const bool rfOk=initDavisRadio();
+  Serial.print(F("[RF] "));Serial.println(rfOk?F("ready"):F("initialization failed"));
+  displayBootMessage(rfOk?"Radio Davis pronta":"ERRORE radio Davis",rfOk?"Ricerca ISS / FHSS...":"Controllare SX1276");
 }
 
 void loop(){
@@ -41,6 +59,11 @@ void loop(){
   if(networkConnected()&&!networkProvisioningActive()&&!dashboardInitialized){initWeb(station);dashboardInitialized=true;Serial.print(F("[WEB] Dashboard: http://"));Serial.println(networkIp());}
   if(dashboardInitialized)serviceWeb();
   serviceMqtt(station);serviceWeatherUpload(station);
+
+  // OLED is deliberately serviced after the RF path. While no Davis lock is
+  // available it remains on the live search/diagnostic page; after lock it
+  // rotates through weather, barometer, RF, lightning and system pages.
+  updateDisplay(station);
 
   static uint32_t ledMs=0;static bool ledActive=false;
   if(digitalRead(BOARD_LED_PIN)==BOARD_LED_ON&&!ledActive){ledMs=millis();ledActive=true;}

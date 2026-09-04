@@ -35,4 +35,14 @@
 #define PROVISION_BUTTON_PIN    0
 #define PROVISION_BUTTON_ACTIVE LOW
 #endif
+
+// Both supported LILYGO profiles use the on-board 128x64 SSD1306 on the shared
+// I2C bus. The bus is intentionally kept at 100 kHz for BME280/AS3935 margin.
+#ifndef OLED_ENABLE
+#define OLED_ENABLE          1
+#endif
+#ifndef OLED_ADDRESS
+#define OLED_ADDRESS         0x3C
+#endif
+
 #define BOARD_LED_OFF       (!BOARD_LED_ON)

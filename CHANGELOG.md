@@ -23,22 +23,34 @@ The project follows a development-first branch model. Versions marked `-dev` are
 - `/api/rf/diagnostics`, `POST /api/rf/reset`, `/api/system` and downloadable `/api/diag/report` endpoints.
 - Web **Diagnostic capture 60 s** workflow that resets the RF diagnostic window and fills the recent-frame buffer for a reproducible test capture.
 - Italian and English extended-diagnostics documentation.
+- `docs/README.md` documentation index for the active `develop` baseline.
+- `docs/LICENSING_IT.md` and `docs/LICENSING_EN.md` with explicit project attribution, provenance and redistribution guidance.
 
 ### Changed
 
 - Firmware version advanced to `0.3.2-dev`.
 - `/api/state` now embeds the richer Davis RF diagnostic object and HTTP upload result details.
 - Diagnostics Web page now prioritizes Davis RF/FHSS, channel distribution, CRC comparison, timing and recent-frame analysis before auxiliary-service JSON.
+- `README.md`, `README_EN.md`, `ARCHITECTURE_0.3.md`, `DIAGNOSTICS_IT.md` and `DIAGNOSTICS_EN.md` aligned with the 0.3.2 baseline.
+- Reset scopes are now documented explicitly: RF diagnostics, network, MQTT, AS3935 and full flash erase/reflash.
+
+### Licensing and provenance
+
+- Canonical GNU LGPLv3 text remains unmodified and the project license remains **`LGPL-3.0-only`** for project-original material unless a file states otherwise.
+- `NOTICE.md` now carries explicit 2026 project attribution to **Gianpaolo P. (`@pgpaolo`) and contributors**, non-affiliation/trademark language and project provenance.
+- `THIRD_PARTY_NOTICES.md` now distinguishes direct library dependencies, Davis protocol references and the relationship with the maintainer's Oregon/Technoline project.
+- The explicit-attribution practice used in the Oregon/Technoline project is retained, while its Oregon/Technoline decoder engine and unrelated GPL-derived `rtl_433` / PracticalArduino portions are not imported into the Davis RF engine.
+- `CONTRIBUTING.md` now requires contributors to disclose copied/adapted third-party source and applicable licensing obligations.
 
 ### RF scope guarantee
 
-- The Davis decoder, CRC algorithm, five-frequency hop set and acquisition strategy are unchanged by this diagnostic release.
+- The Davis decoder, CRC algorithm, five-frequency hop set and acquisition strategy are unchanged by this diagnostic/documentation release.
 - Extended diagnostics are observational and RAM-based; they do not introduce Oregon Scientific, Technoline/LaCrosse or 433 MHz weather decoding.
 
 ### Validation
 
 - Extended RF telemetry core: CI successful on `t3-v161-868` and `t3-s3-868`.
-- Extended Web diagnostics/API build: CI successful on `t3-v161-868` and `t3-s3-868` before the final documentation/version commits.
+- Extended Web diagnostics/API build: CI successful on `t3-v161-868` and `t3-s3-868`.
 - Real packet interpretation remains a hardware-validation task using the new RAW/NORMALIZED/CRC/timing evidence.
 
 ## [0.3.1-dev] - 2026-09-04
@@ -74,7 +86,7 @@ The project follows a development-first branch model. Versions marked `-dev` are
 - Dashboard pages for live weather, Davis RF/FHSS, hardware, configuration and diagnostics.
 - Aggregated `/api/state` / `/api/status` JSON with weather, RF, BME280, MQTT, AS3935 and HTTP upload status.
 - MQTT publisher with runtime NVS configuration, retained telemetry, LWT status, JSON snapshot and optional TLS.
-- MQTT TLS modes: plain, CA-verified TLS and explicit insecure TLS.
+- MQTT TLS modes: plain MQTT, CA-verified TLS and explicit insecure TLS.
 - AS3935 lightning manager with NVS configuration, IRQ handling, calibration, noise/disturber/lightning counters, distance/energy and MQTT event publication.
 - BME280 rediscovery and read-fault recovery, absolute pressure, sea-level pressure, trend estimation and indicative local forecast.
 - On-demand I2C diagnostic scan.

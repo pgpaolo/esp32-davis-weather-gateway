@@ -17,6 +17,8 @@ Versione di sviluppo corrente: **`0.3.2-dev`**.
 
 La CI compila entrambi i target LILYGO supportati. Il decoder RF Davis continua a richiedere validazione sul campo contro una ISS reale prima di dichiarare una release stabile.
 
+La 0.3.2 aggiunge diagnostica RF/FHSS estesa senza modificare il decoder Davis o la sequenza dei cinque hop.
+
 ## Hardware target
 
 - LILYGO / TTGO LoRa32 T3 V1.6.1 con **SX1276/RFM95 868 MHz**
@@ -51,6 +53,8 @@ Davis ISS EU 868 MHz FHSS
 
 `serviceDavisRadio()` conserva la prima priorità nel loop. Display, Web, MQTT e sensori ausiliari non modificano hopping, modulazione o decoder Davis.
 
+Vedere [docs/ARCHITECTURE_0.3.md](docs/ARCHITECTURE_0.3.md).
+
 ## OLED e ricerca Davis
 
 All'avvio l'OLED mostra configurazione/NVS, rete, BME280, AS3935/MQTT e inizializzazione radio. Durante la ricerca alterna **DAVIS SEARCH** e **DAVIS RX RAW** mostrando canale/frequenza, RSSI, contatori, ultimo frame grezzo e stato CRC.
@@ -61,7 +65,7 @@ Vedere [docs/OLED_DISPLAY.md](docs/OLED_DISPLAY.md).
 
 ## Diagnostica RF estesa 0.3.2
 
-La pagina **Diagnostica** è progettata per capire dove si interrompe la catena di ricezione prima di modificare il decoder.
+La pagina **Diagnostica** serve a capire dove si interrompe la catena di ricezione prima di modificare il decoder.
 
 Espone:
 
@@ -128,13 +132,25 @@ La Web UI è destinata a una **LAN fidata** e non deve essere esposta direttamen
 
 ## MQTT e AS3935
 
-MQTT è disabilitato di default e supporta plain MQTT, TLS con CA verificata e insecure TLS solo come opt-in esplicito. AS3935 è opzionale e configurabile via Web/NVS. Sul T3 V1.6.1 il default usa `0x03` e IRQ GPIO34; sul T3-S3 resta disabilitato di default finché non viene validato un GPIO IRQ libero.
+MQTT è disabilitato di default e supporta plain MQTT, TLS con CA verificata e insecure TLS solo come opt-in esplicito.
+
+AS3935 è opzionale e configurabile via Web/NVS. Sul T3 V1.6.1 il default usa `0x03` e IRQ GPIO34; sul T3-S3 resta disabilitato di default finché non viene validato un GPIO IRQ libero.
 
 Vedere [docs/MQTT.md](docs/MQTT.md) e [docs/AS3935.md](docs/AS3935.md).
 
-## Primo avvio e Wi-Fi
+## Primo avvio, Wi-Fi e reset
 
 Se non esiste una configurazione valida il gateway crea `DavisGateway-XXXX` e apre il captive portal su `http://192.168.4.1`. DHCP è il default; `192.168.1.120` è solo il profilo statico suggerito. Dopo 60 s senza rete viene attivato il recovery portal.
+
+Livelli di reset correnti:
+
+- `POST /api/rf/reset` / capture 60 s: azzera solo la diagnostica RF;
+- **Reset rete**: cancella il profilo Wi-Fi/rete e torna al provisioning;
+- Reset MQTT: cancella solo la configurazione MQTT;
+- Reset AS3935: cancella solo la configurazione fulmini;
+- reset flash completo: `esptool erase_flash` seguito da nuovo upload firmware.
+
+La 0.3.2-dev non include ancora un pulsante Web di factory reset totale. La procedura completa è documentata in [docs/DIAGNOSTICS_IT.md](docs/DIAGNOSTICS_IT.md).
 
 ## HTTP / mb.php
 
@@ -151,17 +167,39 @@ La CI compila entrambe le board con OLED/U8g2, Web, diagnostica estesa, MQTT, BM
 
 ## Documentazione
 
+L'indice aggiornato della documentazione di `develop` è in [docs/README.md](docs/README.md).
+
+Documenti principali:
+
 - [Diagnostica estesa Davis](docs/DIAGNOSTICS_IT.md)
 - [Extended Davis diagnostics](docs/DIAGNOSTICS_EN.md)
 - [OLED display e ricerca Davis](docs/OLED_DISPLAY.md)
-- [Architettura applicativa 0.3](docs/ARCHITECTURE_0.3.md)
+- [Architettura applicativa 0.3.2](docs/ARCHITECTURE_0.3.md)
 - [MQTT](docs/MQTT.md)
 - [AS3935 Lightning](docs/AS3935.md)
 - [Note protocollo RF - Italiano](docs/RF_PROTOCOL_IT.md)
 - [RF protocol notes - English](docs/RF_PROTOCOL_EN.md)
+- [Licenza e provenance - Italiano](docs/LICENSING_IT.md)
+- [Licensing and provenance - English](docs/LICENSING_EN.md)
 
-La documentazione RF è indipendente e basata su interoperabilità/reverse engineering pubblico; non è una specifica ufficiale Davis Instruments.
+Le vecchie guide PDF RF v1.0/v1.1 sono mantenute come storico e non descrivono da sole l'intero firmware 0.3.2.
 
-## Sicurezza, branch e licenza
+## Licenza, attribuzioni e provenance
 
-Vedere [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) e [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md). Il codice e la documentazione originali sono distribuiti sotto **GNU LGPL v3.0 only (`LGPL-3.0-only`)**, salvo diversa indicazione.
+Copyright (C) 2026 **Gianpaolo P. (`@pgpaolo`) e contributori**.
+
+Il codice e la documentazione originali del progetto sono distribuiti, salvo diversa indicazione, sotto **GNU LGPL v3.0 only (`LGPL-3.0-only`)**.
+
+La stessa regola di trasparenza adottata nell'altro progetto Oregon/Technoline viene mantenuta qui: provenienza e attribuzioni dei riferimenti tecnici sono documentate esplicitamente, senza importare nel motore Davis i decoder GPL Oregon/Technoline o le relative parti `rtl_433` / PracticalArduino.
+
+Il testo ufficiale LGPL non viene modificato. Le personalizzazioni e attribuzioni del progetto sono separate in:
+
+- [LICENSE](LICENSE)
+- [NOTICE.md](NOTICE.md)
+- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- [docs/LICENSING_IT.md](docs/LICENSING_IT.md)
+- [docs/LICENSING_EN.md](docs/LICENSING_EN.md)
+
+Davis Instruments, Vantage Pro2 e gli altri marchi citati appartengono ai rispettivi titolari. Questo progetto è indipendente e non è affiliato o approvato da Davis Instruments.
+
+Vedere anche [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) e [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md).

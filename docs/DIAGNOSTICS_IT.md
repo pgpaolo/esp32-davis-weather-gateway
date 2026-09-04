@@ -162,6 +162,39 @@ Verificare:
 
 La parte RF principale è operativa. A quel punto il collaudo passa alla correttezza delle conversioni meteo e alla continuità nel tempo.
 
+## Reset e ritorno allo stato iniziale
+
+La 0.3.2-dev distingue volutamente diversi livelli di reset.
+
+### Reset diagnostica RF
+
+`POST /api/rf/reset` oppure il pulsante **Diagnostic capture 60 s** azzerano soltanto la finestra diagnostica: contatori RF osservativi, timing e storico degli ultimi frame.
+
+Non vengono cancellati Wi-Fi, ID ISS, BME280, MQTT, AS3935, endpoint HTTP o cumulati persistenti.
+
+### Reset rete
+
+Il pulsante **Reset rete** cancella il profilo Wi-Fi/rete salvato e riavvia il gateway. Al successivo avvio il dispositivo rientra nel provisioning con SSID `DavisGateway-XXXX` e portale `http://192.168.4.1`.
+
+La pressione prolungata del pulsante BOOT forza il provisioning/recovery, ma non equivale a una cancellazione completa della flash.
+
+### Reset MQTT / AS3935
+
+I pulsanti dedicati cancellano esclusivamente le rispettive configurazioni NVS.
+
+### Ripristino completo della flash
+
+Nella 0.3.2-dev non è ancora presente un pulsante Web di factory reset totale. Per riportare il dispositivo a una flash completamente vuota usare `esptool`, quindi riflashare il firmware:
+
+```text
+python -m esptool --chip esp32 --port COMx erase_flash
+pio run -e t3-v161-868 -t upload
+```
+
+Per T3-S3 usare l'environment PlatformIO corrispondente. `COMx` va sostituito con la porta seriale reale.
+
+La cancellazione completa elimina firmware, NVS, Wi-Fi, MQTT, AS3935, configurazione Davis/HTTP e stato persistente.
+
 ## API
 
 - `/api/rf` - stato RF senza history completa
@@ -170,6 +203,10 @@ La parte RF principale è operativa. A quel punto il collaudo passa alla corrett
 - `/api/diag/report` - report testuale scaricabile
 - `/api/system` - health ESP32
 - `/api/state` - stato aggregato gateway
+
+## Licenza e provenance
+
+La diagnostica fa parte del codice originale del progetto distribuito sotto `LGPL-3.0-only`, salvo diversa indicazione. Vedere `NOTICE.md`, `THIRD_PARTY_NOTICES.md` e `docs/LICENSING_IT.md`.
 
 ## Nota
 

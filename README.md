@@ -7,13 +7,13 @@
 
 Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis Vantage Pro2 / Pro2 Plus wireless europea**, senza console Davis e senza Meteobridge.
 
-> **Confine architetturale:** il motore radio resta esclusivamente **DAVIS Vantage Pro2 EU 868 MHz FHSS / 2-FSK**. Web UI, OLED, MQTT, BME280 e AS3935 sono servizi applicativi e non introducono decoder Oregon Scientific, Technoline/LaCrosse o modalità meteo RF 433 MHz.
+> **Confine architetturale:** il motore radio resta esclusivamente **DAVIS Vantage Pro2 EU 868 MHz FHSS / 2-FSK**. Web UI, OLED, MQTT, BME280, AS3935 e diagnostica sono servizi applicativi e non introducono decoder Oregon Scientific, Technoline/LaCrosse o modalità meteo RF 433 MHz.
 
 `develop` è il branch di integrazione attivo. `main` contiene stati revisionati e promossi tramite Pull Request con CI verde.
 
 ## Stato del progetto
 
-Versione di sviluppo corrente: **`0.3.1-dev`**.
+Versione di sviluppo corrente: **`0.3.2-dev`**.
 
 La CI compila entrambi i target LILYGO supportati. Il decoder RF Davis continua a richiedere validazione sul campo contro una ISS reale prima di dichiarare una release stabile.
 
@@ -26,7 +26,7 @@ La CI compila entrambi i target LILYGO supportati. Il decoder RF Davis continua 
 - **BME280** I2C per barometro lato ricevitore e T/H locale
 - **AS3935** I2C opzionale per rilevamento fulmini
 
-Il bus I2C condiviso OLED/BME280/AS3935 viene mantenuto a **100 kHz** per aumentare il margine di affidabilità.
+Il bus I2C condiviso OLED/BME280/AS3935 viene mantenuto a **100 kHz**.
 
 ## Architettura
 
@@ -43,47 +43,53 @@ Davis ISS EU 868 MHz FHSS
           +-- OLED 128x64            <-- dati + ricerca/diagnostica live
           +-- BME280                 <-- barometro lato ricevitore
           +-- AS3935                 <-- fulmini, I2C + IRQ
-          +-- Web UI / diagnostica
+          +-- Web UI / diagnostica estesa
           +-- MQTT opzionale
           +-- HTTP mb.php opzionale
           +-- NVS / provisioning Wi-Fi
 ```
 
-`serviceDavisRadio()` conserva la prima priorità nel loop. Il display viene aggiornato dopo il percorso RF e non modifica hopping, modulazione o decoder.
+`serviceDavisRadio()` conserva la prima priorità nel loop. Display, Web, MQTT e sensori ausiliari non modificano hopping, modulazione o decoder Davis.
 
-## OLED e diagnostica durante la ricerca
+## OLED e ricerca Davis
 
-Il display integrato viene inizializzato all'avvio e mostra l'avanzamento di boot: configurazione/NVS, rete, BME280, AS3935/MQTT e inizializzazione radio Davis.
+All'avvio l'OLED mostra configurazione/NVS, rete, BME280, AS3935/MQTT e inizializzazione radio. Durante la ricerca alterna **DAVIS SEARCH** e **DAVIS RX RAW** mostrando canale/frequenza, RSSI, contatori, ultimo frame grezzo e stato CRC.
 
-Finché non viene acquisito un pacchetto Davis valido e il ricevitore non è sincronizzato, l'OLED resta sulla pagina **DAVIS SEARCH** e mostra in tempo reale:
-
-- canale FHSS e frequenza corrente
-- filtro ISS `AUTO` oppure ID configurato
-- RSSI quando disponibile
-- pacchetti validi, errori CRC e pacchetti mancati
-- stato BME280 e AS3935
-- IP Web oppure IP del captive portal/recovery
-
-Dopo il lock RF il display ruota automaticamente, circa ogni 6,5 s, tra:
-
-1. dati meteo Davis
-2. vento e pioggia
-3. barometro BME280, trend e previsione
-4. diagnostica RF Davis/FHSS
-5. AS3935 fulmini
-6. stato gateway, Wi-Fi, MQTT, heap e uptime
-
-Se il flusso Davis diventa stale per circa 12 s o si perde la sincronizzazione, il display torna automaticamente alla schermata **DAVIS SEARCH**. Se l'SX1276 non si inizializza compare invece **DAVIS RF ERROR** con il codice RadioLib.
+Dopo il lock ruota fra meteo, vento/pioggia, barometro, RF/FHSS, AS3935 e stato gateway. Se il traffico diventa stale o il lock viene perso, ritorna automaticamente alla ricerca.
 
 Vedere [docs/OLED_DISPLAY.md](docs/OLED_DISPLAY.md).
 
-## Dati meteo
+## Diagnostica RF estesa 0.3.2
+
+La pagina **Diagnostica** è progettata per capire dove si interrompe la catena di ricezione prima di modificare il decoder.
+
+Espone:
+
+- stati `ERROR / SEARCH / CANDIDATE / SYNC`;
+- statistiche separate per tutti i cinque canali Davis EU;
+- RAW, NORMALIZED, CRC ricevuto e CRC calcolato;
+- ring buffer RAM degli ultimi **24 frame**;
+- RSSI ultimo/medio/min/max per canale;
+- timing, min/max/media e jitter rispetto ai circa 2555 ms attesi;
+- IRQ DIO0, `readData()`, tune, hop, miss streak e codici RadioLib;
+- health ESP32: uptime, heap libero/minimo, CPU, Wi-Fi RSSI e reset reason;
+- pulsante **Diagnostic capture 60 s**;
+- report testuale scaricabile `davis-diagnostic.txt`.
+
+Interpretazione rapida:
+
+- `RAW = 0`: nessun frame candidato arriva al percorso radio;
+- `RAW > 0` ma `CRC KO`: segnale presente, verificare framing/bit order/CRC;
+- `CRC OK` ma nessun `SYNC`: verificare ID ISS e continuità FHSS;
+- `SYNC`: ricezione Davis sostanzialmente acquisita.
+
+Vedere [docs/DIAGNOSTICS_IT.md](docs/DIAGNOSTICS_IT.md) e [docs/DIAGNOSTICS_EN.md](docs/DIAGNOSTICS_EN.md).
+
+## Dati meteo e pressione
 
 Dalla Davis ISS: temperatura/umidità esterne, vento, direzione, raffica, pioggia/rain rate, UV, radiazione solare e flag batteria trasmettitore.
 
 Dal gateway: pressione BME280 assoluta e ridotta al livello del mare, T/H locale, trend barometrico, previsione indicativa e dati/eventi AS3935.
-
-### Pressione Davis
 
 Per la **Vantage Pro2 Sensor Suite 6322/6322M** il barometro non è nell'ISS esterna. Nell'ecosistema Davis la misura barometrica è lato ricevente; il gateway segue la stessa architettura usando un BME280 locale.
 
@@ -101,11 +107,22 @@ Hop set EU implementato:
 
 **Non sono presenti** `oregon_receiver`, decoder Oregon Scientific, decoder Technoline/LaCrosse o modalità RF meteo 433 MHz.
 
-## Web UI e diagnostica
+## Web UI e API
 
-La dashboard dark/tabbed espone Dashboard, Hardware, Configurazione e Diagnostica, con stato **NET / RF / BME / MQTT / AS3935** e API JSON dedicate.
+La dashboard dark/tabbed espone Dashboard, Hardware, Configurazione e Diagnostica, con stato **NET / RF / BME / MQTT / AS3935**.
 
-API principali: `/api/state`, `/api/status`, `/api/bme`, `/api/i2c/scan`, `/api/as3935/state`, `/api/as3935/config`, `/api/mqtt/status`, `/api/mqtt/config`, `/api/config`, `/api/meteobridge`.
+API principali:
+
+- `/api/state` e `/api/status`
+- `/api/rf`
+- `/api/rf/diagnostics`
+- `POST /api/rf/reset`
+- `/api/diag/report`
+- `/api/system`
+- `/api/bme` e `/api/i2c/scan`
+- API AS3935 e MQTT
+- `/api/config`
+- `/api/meteobridge`
 
 La Web UI è destinata a una **LAN fidata** e non deve essere esposta direttamente su Internet senza autenticazione/proxy appropriato.
 
@@ -130,10 +147,12 @@ pio run -e t3-v161-868
 pio run -e t3-s3-868
 ```
 
-La CI `0.3.1-dev` compila entrambe le board con OLED/U8g2, Web, MQTT, BME280 e AS3935. Sul T3 V1.6.1 la build OLED usa circa **54,3 kB RAM** e **1,169 MB flash** nella partizione applicativa corrente.
+La CI compila entrambe le board con OLED/U8g2, Web, diagnostica estesa, MQTT, BME280 e AS3935.
 
 ## Documentazione
 
+- [Diagnostica estesa Davis](docs/DIAGNOSTICS_IT.md)
+- [Extended Davis diagnostics](docs/DIAGNOSTICS_EN.md)
 - [OLED display e ricerca Davis](docs/OLED_DISPLAY.md)
 - [Architettura applicativa 0.3](docs/ARCHITECTURE_0.3.md)
 - [MQTT](docs/MQTT.md)

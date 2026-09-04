@@ -22,10 +22,13 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 bool available = false;
 uint32_t lastRefreshMs = 0;
 uint32_t pageEpochMs = 0;
+uint32_t searchPhaseEpochMs = 0;
 uint8_t page = 0;
+uint8_t searchPhase = 0;
 
 constexpr uint32_t REFRESH_MS = 750UL;
 constexpr uint32_t PAGE_INTERVAL_MS = 6500UL;
+constexpr uint32_t SEARCH_PHASE_MS = 2500UL;
 constexpr uint8_t PAGE_COUNT = 6U;
 constexpr uint32_t STALE_PACKET_MS = 12000UL;
 
@@ -59,6 +62,11 @@ void valueOrDash(char *buf, size_t len, float value, uint8_t decimals, const cha
   else snprintf(buf, len, "%.1f%s", value, suffix);
 }
 
+void formatRaw5(char *buf, size_t len, const uint8_t *raw) {
+  snprintf(buf, len, "%02X %02X %02X %02X %02X",
+           raw[0], raw[1], raw[2], raw[3], raw[4]);
+}
+
 void renderSearch(const StationState &s) {
 #if OLED_ENABLE
   const DavisRadioStatus &rf = getDavisRadioStatus();
@@ -77,16 +85,41 @@ void renderSearch(const StationState &s) {
   }
 
   snprintf(b, sizeof(b), "CH%u  %.6f MHz", (unsigned)(rf.channel + 1U), rf.frequencyMhz); line(b, 23);
-  if (runtimeConfig.issId == 0) snprintf(b, sizeof(b), "ISS AUTO   RSSI %s", isfinite(s.rssi) ? String(s.rssi,1).c_str() : "--");
-  else snprintf(b, sizeof(b), "ISS ID %u  RSSI %s", (unsigned)runtimeConfig.issId, isfinite(s.rssi) ? String(s.rssi,1).c_str() : "--");
+  if (runtimeConfig.issId == 0) snprintf(b, sizeof(b), "ISS AUTO   RSSI %s", isfinite(rf.lastRawRssi) ? String(rf.lastRawRssi,1).c_str() : "--");
+  else snprintf(b, sizeof(b), "ISS ID %u  RSSI %s", (unsigned)runtimeConfig.issId, isfinite(rf.lastRawRssi) ? String(rf.lastRawRssi,1).c_str() : "--");
   line(b, 33);
-  snprintf(b, sizeof(b), "OK %lu CRC %lu MISS %lu", (unsigned long)s.packetsOk, (unsigned long)s.crcErrors, (unsigned long)s.packetsMissed); line(b, 43);
+  snprintf(b, sizeof(b), "RAW %lu OK %lu CRC %lu", (unsigned long)rf.rawPackets, (unsigned long)s.packetsOk, (unsigned long)s.crcErrors); line(b, 43);
   const LightningState ls = getLightningState();
-  snprintf(b, sizeof(b), "BME %s AS %s", pressureSensorAvailable() ? "OK" : "scan", ls.detected ? "OK" : (ls.enabled ? "scan" : "off")); line(b, 53);
+  snprintf(b, sizeof(b), "MISS %lu BME %s AS %s", (unsigned long)s.packetsMissed, pressureSensorAvailable() ? "OK" : "scan", ls.detected ? "OK" : (ls.enabled ? "scan" : "off")); line(b, 53);
   if (networkProvisioningActive()) snprintf(b, sizeof(b), "AP %s", networkIp().c_str());
   else if (wifiOk) snprintf(b, sizeof(b), "WEB %s", networkIp().c_str());
   else snprintf(b, sizeof(b), "WiFi ricerca/recovery");
   line(b, 63);
+#endif
+}
+
+void renderRawSearch() {
+#if OLED_ENABLE
+  const DavisRadioStatus &rf = getDavisRadioStatus();
+  const MqttRuntimeStatus &mq = getMqttStatus();
+  header("DAVIS RX RAW", networkConnected(), mq.connected, rf.synchronized);
+  oled.setFont(u8g2_font_5x8_tf);
+  char b[56];
+
+  snprintf(b, sizeof(b), "CH%u %.6f MHz", (unsigned)(rf.channel + 1U), rf.frequencyMhz); line(b, 23);
+  if (!rf.haveRawPacket) {
+    line("Attesa frame RF...", 34);
+    line("Sync CB89 / 10 byte", 44);
+    snprintf(b, sizeof(b), "RAW 0  rc %d", (int)rf.lastRadioError); line(b, 54);
+    line("Ascolto Davis 868", 63);
+    return;
+  }
+
+  const uint32_t ageSec = (millis() - rf.lastRawMs) / 1000UL;
+  snprintf(b, sizeof(b), "RX#%lu CRC %s RSSI %.0f", (unsigned long)rf.rawPackets, rf.lastRawCrcOk ? "OK" : "KO", isfinite(rf.lastRawRssi) ? rf.lastRawRssi : 0.0f); line(b, 33);
+  formatRaw5(b, sizeof(b), &rf.lastRaw[0]); line(b, 43);
+  formatRaw5(b, sizeof(b), &rf.lastRaw[5]); line(b, 53);
+  snprintf(b, sizeof(b), "age %lus  rc %d", (unsigned long)ageSec, (int)rf.lastRadioError); line(b, 63);
 #endif
 }
 
@@ -115,10 +148,10 @@ void renderWindRain(const StationState &s) {
   const MqttRuntimeStatus &mq = getMqttStatus(); const DavisRadioStatus &rf = getDavisRadioStatus();
   header("VENTO / PIOGGIA", networkConnected(), mq.connected, rf.synchronized);
   oled.setFont(u8g2_font_5x8_tf); char b[56];
-  if (isfinite(s.windKmh)) snprintf(b,sizeof(b),"Wind %.1f  Gust %.1f km/h",s.windKmh,isfinite(s.windGustKmh)?s.windGustKmh:0.0f); else snprintf(b,sizeof(b),"Wind --  Gust --"); line(b,23);
+  if (isfinite(s.windKmh)) snprintf(b,sizeof(b),"Wind %.1f Gust %.1f km/h",s.windKmh,isfinite(s.windGustKmh)?s.windGustKmh:0.0f); else snprintf(b,sizeof(b),"Wind -- Gust --"); line(b,23);
   if (isfinite(s.windDirDeg)) snprintf(b,sizeof(b),"Dir %.0f deg",s.windDirDeg); else snprintf(b,sizeof(b),"Dir --"); line(b,33);
-  snprintf(b,sizeof(b),"Rain %.1f mm  %.1f mm/h",s.rainDayMm,s.rainRateMmH); line(b,43);
-  snprintf(b,sizeof(b),"Month %.1f  Year %.1f",s.rainMonthMm,s.rainYearMm); line(b,53);
+  snprintf(b,sizeof(b),"Rain %.1f mm %.1f mm/h",s.rainDayMm,s.rainRateMmH); line(b,43);
+  snprintf(b,sizeof(b),"Month %.1f Year %.1f",s.rainMonthMm,s.rainYearMm); line(b,53);
   snprintf(b,sizeof(b),"Max wind %.1f gust %.1f",isfinite(s.windDayMaxKmh)?s.windDayMaxKmh:0.0f,isfinite(s.gustDayMaxKmh)?s.gustDayMaxKmh:0.0f); line(b,63);
 #endif
 }
@@ -149,10 +182,10 @@ void renderRf(const StationState &s) {
   header("RF DAVIS FHSS", networkConnected(), mq.connected, rf.synchronized);
   oled.setFont(u8g2_font_5x8_tf); char b[56];
   snprintf(b,sizeof(b),"%s CH%u %.6f",rf.synchronized?"SYNC":"SCAN",(unsigned)(rf.channel+1U),rf.frequencyMhz); line(b,23);
-  if (isfinite(s.rssi)) snprintf(b,sizeof(b),"RSSI %.1f dBm ID %u",s.rssi,(unsigned)(s.stationId+1U)); else snprintf(b,sizeof(b),"RSSI --  ID --"); line(b,33);
-  snprintf(b,sizeof(b),"OK %lu CRC %lu",(unsigned long)s.packetsOk,(unsigned long)s.crcErrors); line(b,43);
-  snprintf(b,sizeof(b),"MISS %lu RSYNC %lu",(unsigned long)s.packetsMissed,(unsigned long)s.resyncs); line(b,53);
-  snprintf(b,sizeof(b),"Type %s rc %d",davisPacketTypeName(s.lastPacketType),(int)rf.lastRadioError); line(b,63);
+  if (isfinite(s.rssi)) snprintf(b,sizeof(b),"RSSI %.1f dBm ID %u",s.rssi,(unsigned)(s.stationId+1U)); else snprintf(b,sizeof(b),"RSSI -- ID --"); line(b,33);
+  snprintf(b,sizeof(b),"OK %lu CRC %lu MISS %lu",(unsigned long)s.packetsOk,(unsigned long)s.crcErrors,(unsigned long)s.packetsMissed); line(b,43);
+  snprintf(b,sizeof(b),"RAW %lu last %s",(unsigned long)rf.rawPackets,rf.haveRawPacket?(rf.lastRawCrcOk?"CRCOK":"CRCKO"):"--"); line(b,53);
+  snprintf(b,sizeof(b),"%s RS%lu rc%d",davisPacketTypeName(s.lastPacketType),(unsigned long)s.resyncs,(int)rf.lastRadioError); line(b,63);
 #endif
 }
 
@@ -208,6 +241,7 @@ bool initDisplay() {
   oled.setContrast(255);
   available=true;
   pageEpochMs=millis();
+  searchPhaseEpochMs=pageEpochMs;
   displayBootMessage("ESP32 Davis Gateway","Avvio servizi...");
   Serial.print(F("[OLED] SSD1306 128x64 @0x"));Serial.println(OLED_ADDRESS,HEX);
   return true;
@@ -233,8 +267,11 @@ void updateDisplay(const StationState &station){
   const uint32_t now=millis();if((uint32_t)(now-lastRefreshMs)<REFRESH_MS)return;lastRefreshMs=now;
   oled.clearBuffer();
   if(staleOrSearching(station)){
-    page=0;pageEpochMs=now;renderSearch(station);
+    page=0;pageEpochMs=now;
+    if((uint32_t)(now-searchPhaseEpochMs)>=SEARCH_PHASE_MS){searchPhaseEpochMs=now;searchPhase^=1U;}
+    if(searchPhase==0U)renderSearch(station);else renderRawSearch();
   }else{
+    searchPhase=0;searchPhaseEpochMs=now;
     if((uint32_t)(now-pageEpochMs)>=PAGE_INTERVAL_MS){pageEpochMs=now;page=(uint8_t)((page+1U)%PAGE_COUNT);}
     switch(page){case 0:renderEnvironment(station);break;case 1:renderWindRain(station);break;case 2:renderPressure(station);break;case 3:renderRf(station);break;case 4:renderLightning();break;default:renderSystem();break;}
   }

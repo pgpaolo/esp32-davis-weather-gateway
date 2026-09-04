@@ -2,6 +2,7 @@
 
 #include <RadioLib.h>
 #include <SPI.h>
+#include <string.h>
 
 #include "board_config.h"
 #include "config.h"
@@ -89,9 +90,24 @@ void printPacket(const uint8_t d[10], const DavisDecodeResult &decoded, float rs
   }
   Serial.println();
 }
+
+void printRawPacket(const uint8_t raw[10], bool crcOk, float rssi) {
+  Serial.print(F("[DAVIS-RAW] #")); Serial.print(status.rawPackets);
+  Serial.print(F(" ch=")); Serial.print(status.channel + 1U);
+  Serial.print(F(" rssi=")); Serial.print(rssi, 1);
+  Serial.print(F(" crc=")); Serial.print(crcOk ? F("OK") : F("KO"));
+  Serial.print(F(" raw="));
+  for (uint8_t i = 0; i < kPacketLength; ++i) {
+    if (raw[i] < 0x10) Serial.print('0');
+    Serial.print(raw[i], HEX);
+    if (i + 1U != kPacketLength) Serial.print(' ');
+  }
+  Serial.println();
+}
 }
 
 bool initDavisRadio() {
+  status = DavisRadioStatus{};
   SPI.begin(RADIO_SCLK_PIN, RADIO_MISO_PIN, RADIO_MOSI_PIN, RADIO_CS_PIN);
 
   // Davis ISS: 19.2 kbps 2-FSK, 4.8 kHz deviation, Gaussian BT=0.5,
@@ -150,16 +166,24 @@ void serviceDavisRadio(StationState &station, uint8_t configuredIssId, float rai
 
     uint8_t raw[kPacketLength] = {0};
     int16_t rc = radio.readData(raw, kPacketLength);
-    float rssi = radio.getRSSI(true, true);
+    const float rssi = radio.getRSSI(true, true);
     status.lastRadioError = rc;
 
     uint8_t normalized[kPacketLength] = {0};
     bool crcOk = false;
+    const uint32_t now = millis();
+
     if (rc == RADIOLIB_ERR_NONE) {
+      status.haveRawPacket = true;
+      status.rawPackets++;
+      status.lastRawMs = now;
+      status.lastRawRssi = rssi;
+      memcpy(status.lastRaw, raw, kPacketLength);
       crcOk = validateAndNormalizeDavisPacket(raw, kPacketLength, normalized);
+      status.lastRawCrcOk = crcOk;
+      printRawPacket(raw, crcOk, rssi);
     }
 
-    const uint32_t now = millis();
     lastRxMs = now;
 
     if (crcOk) {

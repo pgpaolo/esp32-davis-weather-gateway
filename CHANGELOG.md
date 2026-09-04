@@ -9,6 +9,38 @@ The project follows a development-first branch model. Versions marked `-dev` are
 - Continue real-hardware validation of Davis FHSS decoding and weather conversions.
 - Select/validate a safe AS3935 IRQ GPIO for each supported T3-S3 hardware revision before enabling lightning support by default on that target.
 
+## [0.3.2-dev] - 2026-09-04
+
+### Added
+
+- Extended Davis RF/FHSS Web diagnostics without changing the weather decoder or hop strategy.
+- Separate statistics for all five EU channels: RAW candidates, CRC valid/invalid, read errors and RSSI last/average/min/max.
+- 24-frame RAM ring buffer with channel, RSSI, RAW bytes, normalized bytes and CRC received/calculated values.
+- Packet timing diagnostics: expected, last, min, max and average interval plus average jitter.
+- SX1276 path counters for DIO0 IRQ, `readData()`, tune, hop, start-receive errors and current miss streak.
+- RF acquisition phases: `ERROR`, `SEARCH`, `CANDIDATE`, `SYNC`.
+- System-health diagnostics with uptime, free/minimum heap, CPU frequency, Wi-Fi RSSI and ESP32 reset reason.
+- `/api/rf/diagnostics`, `POST /api/rf/reset`, `/api/system` and downloadable `/api/diag/report` endpoints.
+- Web **Diagnostic capture 60 s** workflow that resets the RF diagnostic window and fills the recent-frame buffer for a reproducible test capture.
+- Italian and English extended-diagnostics documentation.
+
+### Changed
+
+- Firmware version advanced to `0.3.2-dev`.
+- `/api/state` now embeds the richer Davis RF diagnostic object and HTTP upload result details.
+- Diagnostics Web page now prioritizes Davis RF/FHSS, channel distribution, CRC comparison, timing and recent-frame analysis before auxiliary-service JSON.
+
+### RF scope guarantee
+
+- The Davis decoder, CRC algorithm, five-frequency hop set and acquisition strategy are unchanged by this diagnostic release.
+- Extended diagnostics are observational and RAM-based; they do not introduce Oregon Scientific, Technoline/LaCrosse or 433 MHz weather decoding.
+
+### Validation
+
+- Extended RF telemetry core: CI successful on `t3-v161-868` and `t3-s3-868`.
+- Extended Web diagnostics/API build: CI successful on `t3-v161-868` and `t3-s3-868` before the final documentation/version commits.
+- Real packet interpretation remains a hardware-validation task using the new RAW/NORMALIZED/CRC/timing evidence.
+
 ## [0.3.1-dev] - 2026-09-04
 
 ### Added

@@ -8,6 +8,7 @@
 #include "board_config.h"
 #include "config.h"
 #include "davis_radio.h"
+#include "display_control.h"
 #include "lightning_manager.h"
 #include "meteobridge_client.h"
 #include "mqtt_publisher.h"
@@ -38,8 +39,9 @@ String sdStateJson(){String j=sdLoggerStatusJson();const SdLoggerConfig c=getSdL
 
 String stateJson(){
   const StationState&s=*statePtr;const UploadStatus&up=getUploadStatus();const MqttRuntimeConfig mc=getMqttConfig();const MqttRuntimeStatus&ms=getMqttStatus();
-  String j;j.reserve(9800);j="{\"firmware\":\""+String(FIRMWARE_VERSION)+"\",\"board\":\""+String(BOARD_NAME)+"\"";
+  String j;j.reserve(10500);j="{\"firmware\":\""+String(FIRMWARE_VERSION)+"\",\"board\":\""+String(BOARD_NAME)+"\"";
   j+=",\"system\":"+systemJson();
+  j+=",\"display\":"+displayControlJson();
   j+=",\"network\":{\"connected\":";j+=networkConnected()?"true":"false";j+=",\"ip\":\""+escJson(networkIp())+"\",\"ssid\":\""+escJson(networkSsid())+"\",\"mode\":\""+escJson(networkModeName())+"\"}";
   j+=",\"weather\":{\"temperature_c\":"+jf(s.outTempC)+",\"humidity_pct\":"+jf(s.outHumidity,0)+",\"dewpoint_c\":"+jf(calcDewPointC(s.outTempC,s.outHumidity))+",\"wind_kmh\":"+jf(s.windKmh)+",\"gust_kmh\":"+jf(s.windGustKmh)+",\"direction_deg\":"+jf(s.windDirDeg,0)+",\"wind_chill_c\":"+jf(calcWindChillC(s.outTempC,s.windKmh))+",\"rain_rate_mmh\":"+jf(s.rainRateMmH)+",\"rain_day_mm\":"+jf(s.rainDayMm)+",\"rain_month_mm\":"+jf(s.rainMonthMm)+",\"rain_year_mm\":"+jf(s.rainYearMm)+",\"uv\":"+jf(s.uv)+",\"solar_wm2\":"+jf(s.solarWm2,0)+"}";
   j+=",\"rf\":"+rfJsonWithAge(false);j+=",\"bme\":"+pressureStatusJson(s);j+=",\"lightning\":"+lightningStateJson();
@@ -51,7 +53,7 @@ String stateJson(){
 
 String configJson(){String j;j.reserve(850);j="{\"hostname\":\""+escJson(runtimeConfig.hostname)+"\",\"dhcp\":";j+=runtimeConfig.useDhcp?"true":"false";j+=",\"static_ip\":\""+escJson(runtimeConfig.staticIp)+"\",\"gateway\":\""+escJson(runtimeConfig.gateway)+"\",\"netmask\":\""+escJson(runtimeConfig.netmask)+"\",\"dns\":\""+escJson(runtimeConfig.dns)+"\",\"iss_id\":"+String(runtimeConfig.issId)+",\"rain_tip_mm\":"+String(runtimeConfig.rainMmPerTip,3)+",\"bme_altitude_m\":"+String(runtimeConfig.bmeAltitudeM,1)+",\"timezone\":\""+escJson(runtimeConfig.tzInfo)+"\",\"mb_url\":\""+escJson(runtimeConfig.mbUrl)+"\",\"upload_interval_ms\":"+String(runtimeConfig.uploadIntervalMs)+",\"tls_insecure\":";j+=runtimeConfig.tlsInsecure?"true":"false";j+="}";return j;}
 
-String diagnosticReport(){String r;r.reserve(16000);r+=davisRadioDiagnosticReport(*statePtr,runtimeConfig.issId);r+="\nSystem:\nReset: "+String(resetReasonName())+"\nUptime ms: "+String(millis())+"\nFree heap: "+String(ESP.getFreeHeap())+"\nMin free heap: "+String(ESP.getMinFreeHeap())+"\nCPU MHz: "+String(ESP.getCpuFreqMHz())+"\nWiFi: "+String(networkConnected()?"connected":"offline")+"\nIP: "+networkIp()+"\nWiFi RSSI: "+(networkConnected()?String(WiFi.RSSI())+" dBm":String("--"))+"\n\nBME280:\n"+pressureStatusJson(*statePtr)+"\n\nAS3935:\n"+lightningStateJson()+"\n\nMQTT:\n"+mqttStatusJson()+"\n\nmicroSD:\n"+sdLoggerStatusJson()+"\n\nRemote-ready:\n"+remoteAccessStatusJson()+"\n\nHTTP upload:\n";const UploadStatus&u=getUploadStatus();r+="Attempts="+String(u.attempts)+" Successes="+String(u.successes)+" LastHTTP="+String(u.lastHttpCode)+" Message="+u.lastMessage+"\n";return r;}
+String diagnosticReport(){String r;r.reserve(17000);r+=davisRadioDiagnosticReport(*statePtr,runtimeConfig.issId);r+="\nSystem:\nReset: "+String(resetReasonName())+"\nUptime ms: "+String(millis())+"\nFree heap: "+String(ESP.getFreeHeap())+"\nMin free heap: "+String(ESP.getMinFreeHeap())+"\nCPU MHz: "+String(ESP.getCpuFreqMHz())+"\nWiFi: "+String(networkConnected()?"connected":"offline")+"\nIP: "+networkIp()+"\nWiFi RSSI: "+(networkConnected()?String(WiFi.RSSI())+" dBm":String("--"))+"\n\nDisplay:\n"+displayControlJson()+"\n\nBME280:\n"+pressureStatusJson(*statePtr)+"\n\nAS3935:\n"+lightningStateJson()+"\n\nMQTT:\n"+mqttStatusJson()+"\n\nmicroSD:\n"+sdLoggerStatusJson()+"\n\nAdminSensor Remote:\n"+remoteAccessStatusJson()+"\n\nHTTP upload:\n";const UploadStatus&u=getUploadStatus();r+="Attempts="+String(u.attempts)+" Successes="+String(u.successes)+" LastHTTP="+String(u.lastHttpCode)+" Message="+u.lastMessage+"\n";return r;}
 
 void sendDashboard(){noCache();server.sendHeader("Content-Encoding","gzip");server.send_P(200,"text/html; charset=utf-8",(PGM_P)WEB_UI_GZ,WEB_UI_GZ_LEN);}
 } // namespace
@@ -63,6 +65,7 @@ void initWeb(StationState &station){
   server.on("/api/state",HTTP_GET,[]{noCache();server.send(200,"application/json",stateJson());});
   server.on("/api/status",HTTP_GET,[]{noCache();server.send(200,"application/json",stateJson());});
   server.on("/api/system",HTTP_GET,[]{server.send(200,"application/json",systemJson());});
+  server.on("/api/display",HTTP_GET,[]{server.send(200,"application/json",displayControlJson());});
   server.on("/api/rf",HTTP_GET,[]{server.send(200,"application/json",rfJsonWithAge(false));});
   server.on("/api/rf/diagnostics",HTTP_GET,[]{server.send(200,"application/json",rfJsonWithAge(true));});
   server.on("/api/rf/reset",HTTP_POST,[]{resetDavisDiagnosticWindow();server.send(200,"text/plain","Finestra diagnostica RF azzerata");});
@@ -78,6 +81,13 @@ void initWeb(StationState &station){
   server.on("/api/sd",HTTP_GET,[]{server.send(200,"application/json","{\"config\":"+sdLoggerConfigJson()+",\"status\":"+sdLoggerStatusJson()+"}");});
   server.on("/api/remote/config",HTTP_GET,[]{server.send(200,"application/json",remoteAccessConfigJson());});
   server.on("/api/remote/status",HTTP_GET,[]{server.send(200,"application/json",remoteAccessStatusJson());});
+
+  server.on("/api/display",HTTP_POST,[]{
+    if(!server.hasArg("enabled")){server.send(400,"text/plain","Parametro enabled mancante");return;}
+    const bool enabled=server.arg("enabled")=="1"||server.arg("enabled")=="true"||server.arg("enabled")=="on";
+    const bool ok=setDisplayControlEnabled(enabled);
+    server.send(ok?200:500,"text/plain",ok?(enabled?"Display acceso":"Display spento"):"Impossibile salvare stato display");
+  });
 
   server.on("/api/config",HTTP_POST,[]{
     runtimeConfig.hostname=server.arg("host");if(runtimeConfig.hostname.isEmpty())runtimeConfig.hostname=DEVICE_HOSTNAME_DEFAULT;
@@ -101,8 +111,13 @@ void initWeb(StationState &station){
   server.on("/api/sd/remount",HTTP_POST,[]{const bool ok=remountSdLogger();server.send(ok?200:503,"text/plain",ok?"microSD montata":"Mount microSD fallito");});
   server.on("/api/sd/format",HTTP_POST,[]{if(server.arg("confirm")!="FORMAT"){server.send(400,"text/plain","Conferma FORMAT mancante");return;}const bool ok=formatSdLogger();server.send(ok?200:500,"text/plain",ok?"microSD formattata e montata":"Formattazione microSD fallita");});
 
-  server.on("/api/remote/config",HTTP_POST,[]{RemoteAccessConfig c=getRemoteAccessConfig();c.enabled=server.hasArg("enabled");c.relayUrl=server.arg("url");c.deviceId=server.arg("device");c.heartbeatSec=(uint16_t)server.arg("heartbeat").toInt();c.allowRemoteAdmin=server.hasArg("admin");const bool rt=server.hasArg("replace_token"),rc=server.hasArg("replace_ca");if(rt)c.token=server.arg("token");if(rc)c.caCertificate=server.arg("ca");if(!saveRemoteAccessConfig(c,rt,rc)){server.send(400,"text/plain","Profilo remoto non valido: per abilitarlo servono relay HTTPS, Device ID, token e CA");return;}server.send(200,"text/plain","Profilo accesso remoto salvato");});
-  server.on("/api/remote/reset",HTTP_POST,[]{const bool ok=resetRemoteAccessConfig();server.send(ok?200:500,"text/plain",ok?"Profilo remoto cancellato":"Reset remoto fallito");});
+  server.on("/api/remote/config",HTTP_POST,[]{
+    const String url=server.arg("url");
+    if(!saveRemoteAccessPortalUrl(url)){server.send(400,"text/plain","URL portale non valido: usare HTTPS senza query o fragment");return;}
+    server.send(200,"text/plain",url.isEmpty()?"AdminSensor Remote disabilitato":"URL portale salvato; registrazione automatica avviata");
+  });
+  server.on("/api/remote/retry",HTTP_POST,[]{retryRemoteAccessNow();server.send(200,"text/plain","Nuovo tentativo AdminSensor richiesto");});
+  server.on("/api/remote/reset",HTTP_POST,[]{const bool ok=resetRemoteAccessConfig();server.send(ok?200:500,"text/plain",ok?"Portale remoto disabilitato; identita dispositivo conservata":"Reset remoto fallito");});
 
   server.on("/api/test-upload",HTTP_POST,[]{const bool ok=sendWeatherRecordNow(*statePtr);server.send(ok?200:502,"text/plain",ok?"Upload riuscito":getUploadStatus().lastMessage);});
   server.on("/api/network/reset",HTTP_POST,[]{shutdownSdLogger();clearRuntimeWifiConfig();server.send(200,"text/plain","Rete cancellata. Riavvio...");delay(500);ESP.restart();});

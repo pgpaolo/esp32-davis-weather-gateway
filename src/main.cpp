@@ -3,6 +3,7 @@
 #include "board_config.h"
 #include "config.h"
 #include "davis_radio.h"
+#include "display_control.h"
 #include "display_manager.h"
 #include "lightning_manager.h"
 #include "meteobridge_client.h"
@@ -25,12 +26,13 @@ void setup(){
   Serial.print(F(" ESP32 Davis Weather Gateway "));Serial.println(FIRMWARE_VERSION);
   Serial.print(F(" Board: "));Serial.println(BOARD_NAME);
   Serial.println(F(" RF engine: DAVIS Vantage Pro2 EU 868 MHz FHSS / 2-FSK"));
-  Serial.println(F(" Services: OLED + BME280 + AS3935 + MQTT + microSD + Web UI + HTTP upload"));
+  Serial.println(F(" Services: OLED + BME280 + AS3935 + MQTT + microSD + Web UI + AdminSensor Remote"));
   Serial.println(F("========================================"));
 
   pinMode(BOARD_LED_PIN,OUTPUT);digitalWrite(BOARD_LED_PIN,BOARD_LED_OFF);
   loadRuntimeConfig();
   const bool oledOk=initDisplay();
+  initDisplayControl(oledOk);
   Serial.print(F("[OLED] "));Serial.println(oledOk?F("ready"):F("not detected/disabled"));
   displayBootMessage("Configurazione caricata","Rete / NVS...");
 

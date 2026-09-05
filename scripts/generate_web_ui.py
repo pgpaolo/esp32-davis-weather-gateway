@@ -2,6 +2,7 @@ Import("env")
 
 from pathlib import Path
 import gzip
+import re
 
 project_dir = Path(env.subst("$PROJECT_DIR"))
 pioenv = env.subst("$PIOENV")
@@ -12,21 +13,33 @@ generated_dir.mkdir(parents=True, exist_ok=True)
 source_path = project_dir / "web" / "dashboard.html"
 html = source_path.read_text(encoding="utf-8")
 
-# Keep the large dashboard source stable while applying small release annotations
-# at build time. Fail loudly if an expected anchor changes in a future UI edit.
+# Normalize the project footer at build time. This operation is intentionally
+# idempotent: both an older dashboard and a dashboard already carrying the
+# current attribution must compile successfully.
 old_footer = '<div class="footer">ESP32 Davis Weather Gateway · firmware open source · interfaccia locale</div>'
 new_footer = '<div class="footer">ESP32 Davis Weather Gateway · Gianpaolo P. · firmware open source · interfaccia locale</div>'
-if old_footer not in html:
-    raise RuntimeError("Dashboard footer anchor not found")
-html = html.replace(old_footer, new_footer, 1)
+if new_footer not in html:
+    if old_footer in html:
+        html = html.replace(old_footer, new_footer, 1)
+    else:
+        # Accept minor footer wording changes while keeping the canonical
+        # project attribution. Fail only if the footer element itself vanished.
+        pattern = r'<div class="footer">ESP32 Davis Weather Gateway[^<]*</div>'
+        html, replaced = re.subn(pattern, new_footer, html, count=1)
+        if replaced != 1:
+            raise RuntimeError("Dashboard footer element not found")
 
+# Add the current-log viewer only when the source dashboard does not already
+# contain it. This prevents duplicate buttons when UI changes are promoted
+# back into web/dashboard.html.
 viewer = '<a class="btn secondary" href="/api/sd/current" target="_blank" rel="noopener">Visualizza log SD</a>'
-hardware_anchor = '<button onclick="sdRemount()">Rimonta</button>'
-config_anchor = '<button class="secondary" onclick="sdRemount()">Rimonta</button>'
-if hardware_anchor not in html or config_anchor not in html:
-    raise RuntimeError("microSD action anchor not found")
-html = html.replace(hardware_anchor, hardware_anchor + viewer, 1)
-html = html.replace(config_anchor, config_anchor + viewer, 1)
+if '/api/sd/current' not in html:
+    hardware_anchor = '<button onclick="sdRemount()">Rimonta</button>'
+    config_anchor = '<button class="secondary" onclick="sdRemount()">Rimonta</button>'
+    if hardware_anchor not in html or config_anchor not in html:
+        raise RuntimeError("microSD action anchor not found")
+    html = html.replace(hardware_anchor, hardware_anchor + viewer, 1)
+    html = html.replace(config_anchor, config_anchor + viewer, 1)
 
 payload = gzip.compress(html.encode("utf-8"), compresslevel=9, mtime=0)
 

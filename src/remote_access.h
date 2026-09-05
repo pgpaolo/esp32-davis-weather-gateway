@@ -16,11 +16,18 @@ struct RemoteAccessStatus {
   String deviceId;
   uint32_t enrollAttempts = 0;
   int lastEnrollHttpCode = 0;
+  uint32_t wsAttempts = 0;
   uint32_t wsConnects = 0;
   uint32_t wsDisconnects = 0;
+  uint32_t wsHandshakeFailures = 0;
   uint32_t requests = 0;
   uint32_t responses = 0;
+  uint32_t heartbeatsSent = 0;
   uint32_t lastActivityMs = 0;
+  uint32_t lastWsAttemptMs = 0;
+  String wsHost;
+  String wsPath;
+  String lastWsEvent;
   String lastError;
 };
 

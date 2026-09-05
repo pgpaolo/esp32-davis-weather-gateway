@@ -63,18 +63,6 @@ void stopSha() {
   }
 }
 
-void resetRuntimeState() {
-  source=UpdateSource::NONE;
-  inProgress=false;
-  failed=false;
-  firstChunk=true;
-  expectedSequence=0;
-  expectedSize=0;
-  receivedSize=0;
-  expectedSha256="";
-  stopSha();
-}
-
 void setFailure(const String &msg) {
   failed=true;
   lastError=msg;
@@ -133,7 +121,7 @@ bool beginUpdate(UpdateSource requestedSource, size_t imageSize, const String &s
   return true;
 }
 
-bool writeUpdate(UpdateSource requestedSource, uint32_t sequence, const uint8_t *data, size_t len, String &error) {
+bool writeUpdate(UpdateSource requestedSource, uint32_t sequence, uint8_t *data, size_t len, String &error) {
   error="";
   if (!data || len == 0) { error="Blocco firmware vuoto"; return false; }
   if (!lock()) { error="Updater occupato"; return false; }
@@ -311,7 +299,7 @@ bool firmwareRemoteBegin(size_t imageSize, const String &sha256Hex, String &erro
   return beginUpdate(UpdateSource::REMOTE,imageSize,sha256Hex,error);
 }
 
-bool firmwareRemoteWrite(uint32_t sequence, const uint8_t *data, size_t len, String &error) {
+bool firmwareRemoteWrite(uint32_t sequence, uint8_t *data, size_t len, String &error) {
   if (len > 8192U) { error="Blocco remoto oltre 8192 byte"; return false; }
   return writeUpdate(UpdateSource::REMOTE,sequence,data,len,error);
 }

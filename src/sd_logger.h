@@ -45,5 +45,9 @@ bool resetSdLoggerConfig(bool &changed);
 bool remountSdLogger();
 bool formatSdLogger();
 
+// Read-only preview of the current on-disk CSV. Large files are returned as
+// header + tail so the Web UI can inspect logging without exhausting ESP32 RAM.
+bool sdLoggerCurrentFilePreview(String &content, uint32_t &fileSize, bool &truncated);
+
 String sdLoggerConfigJson();
 String sdLoggerStatusJson();

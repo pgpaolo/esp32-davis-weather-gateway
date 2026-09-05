@@ -5,7 +5,7 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.4.5-opt-dev"
+#define FIRMWARE_VERSION "0.4.6-opt-dev"
 #endif
 
 #ifndef DEVICE_HOSTNAME_DEFAULT

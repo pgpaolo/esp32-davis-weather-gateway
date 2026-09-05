@@ -10,9 +10,11 @@
 #include <esp_mac.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <mbedtls/base64.h>
+#include <new>
 #include <time.h>
 #include <vector>
 
@@ -25,24 +27,42 @@
 namespace {
 constexpr const char *NVS_NS="remote", *NVS_URL="url", *NVS_TOKEN="token";
 constexpr time_t TLS_EPOCH=1700000000;
+// Keep the connection timings proven on develop. Do not make the WebSocket
+// more aggressive: the HTTP proxy is decoupled instead.
 constexpr uint32_t RETRY_PENDING=30000UL, RETRY_ERROR=15000UL, RETRY_APPROVED=60000UL;
 constexpr size_t MAX_REQ=12288U, MAX_RESP=24576U, MAX_WS=38000U;
+constexpr UBaseType_t HTTP_QUEUE_LEN=4;
 
 struct UrlParts{String host,path;uint16_t port=443;};
 struct LocalResp{int code=502;String type="text/plain; charset=utf-8",encoding,location,cache,disposition;std::vector<uint8_t> body;};
+struct RemoteReq{
+  uint32_t session=0;
+  String id,method,path,contentType,accept;
+  std::vector<uint8_t> body;
+};
+struct RemoteReply{
+  uint32_t session=0;
+  String id;
+  LocalResp response;
+};
 
 RemoteAccessConfig cfg;
 RemoteAccessStatus st;
 String token;
 SemaphoreHandle_t mux=nullptr;
-TaskHandle_t taskHandle=nullptr;
+TaskHandle_t taskHandle=nullptr,workerHandle=nullptr;
+QueueHandle_t requestQueue=nullptr,responseQueue=nullptr;
 WebSocketsClient ws;
 String wsAuth,activeWsUrl;
 bool wsStarted=false;
 volatile uint32_t generation=1;
 volatile bool forceRetry=false;
+volatile bool workerBusy=false;
+uint32_t wsSession=0;
+uint32_t queueDrops=0;
 
-bool take(){return mux&&xSemaphoreTake(mux,pdMS_TO_TICKS(250))==pdTRUE;}void give(){if(mux)xSemaphoreGive(mux);}
+bool take(){return mux&&xSemaphoreTake(mux,pdMS_TO_TICKS(250))==pdTRUE;}
+void give(){if(mux)xSemaphoreGive(mux);}
 String esc(const String&s){String o;o.reserve(s.length()+8);for(char c:s){if(c=='\\'||c=='"'){o+='\\';o+=c;}else if(c=='\n')o+="\\n";else if(c!='\r')o+=c;}return o;}
 
 String makeId(){uint8_t m[6]={0};if(esp_read_mac(m,ESP_MAC_WIFI_STA)!=ESP_OK){uint64_t e=ESP.getEfuseMac();for(uint8_t i=0;i<6;i++)m[5-i]=(e>>(8*i))&0xff;}char b[32];snprintf(b,sizeof(b),"esp32-%02x%02x%02x%02x%02x%02x",m[0],m[1],m[2],m[3],m[4],m[5]);return String(b);}
@@ -61,34 +81,208 @@ bool b64dec(const String&s,std::vector<uint8_t>&out){out.clear();if(s.isEmpty())
 String hdr(const JsonObjectConst&h,const char*wanted){if(h.isNull())return String();String target=wanted;target.toLowerCase();for(JsonPairConst kv:h){String k=kv.key().c_str();k.toLowerCase();if(k==target){String v=kv.value().as<String>();v.replace("\r","");v.replace("\n","");if(v.length()>256)v.remove(256);return v;}}return String();}
 bool safePath(const String&p){return !p.isEmpty()&&p.length()<768&&p[0]=='/'&&p.indexOf("\r")<0&&p.indexOf("\n")<0&&p.indexOf("://")<0;}
 
-bool localHttp(String method,const String&path,const JsonObjectConst&headers,const std::vector<uint8_t>&req,LocalResp&r,String&err){
-  if(!webStarted()){err="Web UI locale non pronta";return false;}method.toUpperCase();if(!safePath(path)){err="Path non valido";return false;}if(method!="GET"&&method!="POST"&&method!="HEAD"){r.code=405;const char*m="Method not allowed";r.body.assign(m,m+strlen(m));return true;}
-  WiFiClient c;c.setTimeout(6000);IPAddress ip=WiFi.localIP();if(!c.connect(ip,80)){c.stop();if(!c.connect(IPAddress(127,0,0,1),80)){err="Connessione Web UI locale fallita";return false;}}
-  c.print(method);c.print(' ');c.print(path);c.print(F(" HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n"));String ct=hdr(headers,"content-type"),ac=hdr(headers,"accept");if(!ct.isEmpty()){c.print(F("Content-Type: "));c.print(ct);c.print(F("\r\n"));}if(!ac.isEmpty()){c.print(F("Accept: "));c.print(ac);c.print(F("\r\n"));}if(!req.empty()){c.print(F("Content-Length: "));c.print(req.size());c.print(F("\r\n"));}c.print(F("\r\n"));if(!req.empty())c.write(req.data(),req.size());
-  uint32_t start=millis();while(!c.available()&&c.connected()&&millis()-start<6000)vTaskDelay(pdMS_TO_TICKS(2));if(!c.available()){c.stop();err="Timeout Web UI locale";return false;}
-  String sl=c.readStringUntil('\n');sl.trim();int a=sl.indexOf(' '),b=sl.indexOf(' ',a+1);if(a<0){c.stop();err="Risposta locale non valida";return false;}r.code=sl.substring(a+1,b>a?b:sl.length()).toInt();size_t len=0;bool haveLen=false;
-  while(c.connected()||c.available()){String l=c.readStringUntil('\n');if(l=="\r"||l.isEmpty())break;l.trim();int x=l.indexOf(':');if(x<1)continue;String k=l.substring(0,x),v=l.substring(x+1);k.toLowerCase();v.trim();if(k=="content-type")r.type=v;else if(k=="content-encoding")r.encoding=v;else if(k=="location")r.location=v;else if(k=="cache-control")r.cache=v;else if(k=="content-disposition")r.disposition=v;else if(k=="content-length"){len=v.toInt();haveLen=true;}}
-  if(haveLen&&len>MAX_RESP){c.stop();err="Risposta locale troppo grande";return false;}r.body.clear();r.body.reserve(haveLen?len:2048);start=millis();while((c.connected()||c.available())&&millis()-start<6000){while(c.available()){int ch=c.read();if(ch<0)break;if(r.body.size()>=MAX_RESP){c.stop();err="Risposta locale oltre limite";return false;}r.body.push_back((uint8_t)ch);if(haveLen&&r.body.size()>=len)break;}if(haveLen&&r.body.size()>=len)break;vTaskDelay(pdMS_TO_TICKS(1));}c.stop();if(haveLen&&r.body.size()<len){err="Risposta locale incompleta";return false;}return true;
+bool localHttp(String method,const String&path,const String&contentType,const String&accept,const std::vector<uint8_t>&req,LocalResp&r,String&err){
+  if(!webStarted()){err="Web UI locale non pronta";return false;}
+  method.toUpperCase();
+  if(!safePath(path)){err="Path non valido";return false;}
+  if(method!="GET"&&method!="POST"&&method!="HEAD"){r.code=405;const char*m="Method not allowed";r.body.assign(m,m+strlen(m));return true;}
+  WiFiClient c;c.setTimeout(6000);IPAddress ip=WiFi.localIP();
+  if(!c.connect(ip,80)){c.stop();if(!c.connect(IPAddress(127,0,0,1),80)){err="Connessione Web UI locale fallita";return false;}}
+  c.print(method);c.print(' ');c.print(path);c.print(F(" HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n"));
+  if(!contentType.isEmpty()){c.print(F("Content-Type: "));c.print(contentType);c.print(F("\r\n"));}
+  if(!accept.isEmpty()){c.print(F("Accept: "));c.print(accept);c.print(F("\r\n"));}
+  if(!req.empty()){c.print(F("Content-Length: "));c.print(req.size());c.print(F("\r\n"));}
+  c.print(F("\r\n"));if(!req.empty())c.write(req.data(),req.size());
+  uint32_t start=millis();while(!c.available()&&c.connected()&&millis()-start<6000)vTaskDelay(pdMS_TO_TICKS(2));
+  if(!c.available()){c.stop();err="Timeout Web UI locale";return false;}
+  String sl=c.readStringUntil('\n');sl.trim();int a=sl.indexOf(' '),b=sl.indexOf(' ',a+1);
+  if(a<0){c.stop();err="Risposta locale non valida";return false;}
+  r.code=sl.substring(a+1,b>a?b:sl.length()).toInt();size_t len=0;bool haveLen=false;
+  while(c.connected()||c.available()){
+    String l=c.readStringUntil('\n');if(l=="\r"||l.isEmpty())break;l.trim();int x=l.indexOf(':');if(x<1)continue;
+    String k=l.substring(0,x),v=l.substring(x+1);k.toLowerCase();v.trim();
+    if(k=="content-type")r.type=v;else if(k=="content-encoding")r.encoding=v;else if(k=="location")r.location=v;else if(k=="cache-control")r.cache=v;else if(k=="content-disposition")r.disposition=v;else if(k=="content-length"){len=v.toInt();haveLen=true;}
+  }
+  // HEAD has headers only by definition. Do not wait for the advertised GET body.
+  if(method=="HEAD"){r.body.clear();r.encoding="";c.stop();return true;}
+  if(haveLen&&len>MAX_RESP){c.stop();err="Risposta locale troppo grande";return false;}
+  r.body.clear();r.body.reserve(haveLen?len:2048);start=millis();
+  while((c.connected()||c.available())&&millis()-start<6000){
+    while(c.available()){
+      int ch=c.read();if(ch<0)break;
+      if(r.body.size()>=MAX_RESP){c.stop();err="Risposta locale oltre limite";return false;}
+      r.body.push_back((uint8_t)ch);if(haveLen&&r.body.size()>=len)break;
+    }
+    if(haveLen&&r.body.size()>=len)break;
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+  c.stop();if(haveLen&&r.body.size()<len){err="Risposta locale incompleta";return false;}
+  // Only advertise gzip when an actual gzip member was received. This protects
+  // the portal from empty/partial/plain responses incorrectly carrying the
+  // local Content-Encoding header.
+  if(r.encoding.equalsIgnoreCase("gzip")){
+    const bool validGzip=r.body.size()>=2&&r.body[0]==0x1f&&r.body[1]==0x8b;
+    if(!validGzip)r.encoding="";
+  }
+  if(r.body.empty())r.encoding="";
+  return true;
 }
 
-void sendResp(const String&id,const LocalResp&r){String b=b64enc(r.body.data(),r.body.size());String o;o.reserve(b.length()+650);o="{\"type\":\"http_response\",\"id\":\""+esc(id)+"\",\"status\":"+String(r.code)+",\"headers\":{\"content-type\":\""+esc(r.type)+"\"";if(!r.encoding.isEmpty())o+=",\"content-encoding\":\""+esc(r.encoding)+"\"";if(!r.location.isEmpty())o+=",\"location\":\""+esc(r.location)+"\"";if(!r.cache.isEmpty())o+=",\"cache-control\":\""+esc(r.cache)+"\"";if(!r.disposition.isEmpty())o+=",\"content-disposition\":\""+esc(r.disposition)+"\"";o+="},\"body_b64\":\""+b+"\"}";if(o.length()<=MAX_WS&&ws.sendTXT(o)){if(take()){st.responses++;st.lastActivityMs=millis();give();}}}
+void sendResp(const String&id,const LocalResp&r){
+  String b=b64enc(r.body.data(),r.body.size());String o;o.reserve(b.length()+650);
+  o="{\"type\":\"http_response\",\"id\":\""+esc(id)+"\",\"status\":"+String(r.code)+",\"headers\":{\"content-type\":\""+esc(r.type)+"\"";
+  if(!r.encoding.isEmpty())o+=",\"content-encoding\":\""+esc(r.encoding)+"\"";
+  if(!r.location.isEmpty())o+=",\"location\":\""+esc(r.location)+"\"";
+  if(!r.cache.isEmpty())o+=",\"cache-control\":\""+esc(r.cache)+"\"";
+  if(!r.disposition.isEmpty())o+=",\"content-disposition\":\""+esc(r.disposition)+"\"";
+  o+="},\"body_b64\":\""+b+"\"}";
+  if(o.length()>MAX_WS)return;
+  if(ws.sendTXT(o)&&take()){st.responses++;st.lastActivityMs=millis();give();}
+}
 void sendErr(const String&id,int code,const String&msg){LocalResp r;r.code=code;r.body.assign(msg.c_str(),msg.c_str()+msg.length());sendResp(id,r);}
 
-void wsText(uint8_t*p,size_t n){if(!p||!n||n>MAX_WS)return;JsonDocument d;if(deserializeJson(d,p,n))return;String type=d["type"]|"",id=d["id"]|"";if(take()){st.lastActivityMs=millis();give();}if(type=="ping"){String x="{\"type\":\"pong\"";if(!id.isEmpty())x+=",\"id\":\""+esc(id)+"\"";x+="}";ws.sendTXT(x);return;}if(type!="http_request"||id.isEmpty())return;if(take()){st.requests++;give();}String method=d["method"]|"GET",path=d["path"]|"/",bb=d["body_b64"]|"";std::vector<uint8_t>body;if(!b64dec(bb,body)){sendErr(id,413,"Request body non valido");return;}LocalResp r;String e;if(!localHttp(method,path,d["headers"].as<JsonObjectConst>(),body,r,e)){sendErr(id,502,e);return;}sendResp(id,r);}
-
-void wsEvent(WStype_t t,uint8_t*p,size_t n){if(t==WStype_CONNECTED){if(take()){st.transportActive=true;st.approved=true;st.state="ONLINE";st.wsConnects++;st.lastActivityMs=millis();st.lastError="";give();}Serial.println(F("[REMOTE] AdminSensor ONLINE"));}else if(t==WStype_DISCONNECTED){if(take()){bool was=st.transportActive;st.transportActive=false;if(st.configured&&st.approved)st.state="RECONNECT";if(was)st.wsDisconnects++;give();}}else if(t==WStype_TEXT)wsText(p,n);else if(t==WStype_PING||t==WStype_PONG){if(take()){st.lastActivityMs=millis();give();}}}
-
-bool enroll(const String&portal,String&wsUrl,bool&pending){pending=false;wsUrl="";WiFiClientSecure c;c.setCACert(REMOTE_TRUST_CA);c.setTimeout(8000);HTTPClient h;h.setConnectTimeout(7000);h.setTimeout(8000);if(!h.begin(c,portal+"/api/device/enroll")){setState("ERROR","HTTPS enroll init fallita");return false;}h.addHeader("Content-Type","application/json");JsonDocument q;q["device_id"]=remoteDefaultDeviceId();q["device_token"]=token;q["name"]=runtimeConfig.hostname.isEmpty()?"Stazione meteo":runtimeConfig.hostname;q["model"]="ESP32 Davis Weather Gateway";q["firmware_version"]=FIRMWARE_VERSION;String body;serializeJson(q,body);if(take()){st.enrollAttempts++;give();}int code=h.POST(body);String resp=code>0?h.getString():String();h.end();if(take()){st.lastEnrollHttpCode=code;st.lastActivityMs=millis();give();}if(code<200||code>=300){setState("ERROR",code>0?String("Enroll HTTP ")+code:"Errore TLS/HTTP enroll");return false;}JsonDocument d;if(deserializeJson(d,resp)){setState("ERROR","Risposta enroll JSON non valida");return false;}String s=d["status"]|"";if(s=="pending"){pending=true;if(take()){st.approved=false;st.transportActive=false;give();}setState("PENDING");return true;}if(s!="approved"){if(take()){st.approved=false;st.transportActive=false;give();}setState("DENIED",s.isEmpty()?"Stato enroll mancante":String("Stato portale: ")+s);return false;}wsUrl=d["websocket_url"]|"";UrlParts u;if(!parseUrl(wsUrl,"wss",u)){setState("ERROR","websocket_url WSS non valido");return false;}if(take()){st.approved=true;st.lastError="";give();}setState("APPROVED");return true;}
-
-bool startWs(const String&url){UrlParts u;if(!parseUrl(url,"wss",u))return false;ws.disconnect();ws.beginSslWithCA(u.host.c_str(),u.port,u.path.c_str(),REMOTE_TRUST_CA,"");wsAuth="Authorization: Bearer "+token;ws.setExtraHeaders(wsAuth.c_str());ws.setReconnectInterval(5000);ws.enableHeartbeat(30000,5000,2);activeWsUrl=url;wsStarted=true;setState("CONNECTING");return true;}
-
-void task(void*){uint32_t seen=0,next=0;for(;;){RemoteAccessConfig c;if(take()){c=cfg;give();}uint32_t g=generation;bool fr=forceRetry;if(fr)forceRetry=false;if(g!=seen||fr){seen=g;if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;if(take()){st.transportActive=false;st.approved=false;give();}}if(c.portalUrl.isEmpty()){setState("OFF");vTaskDelay(pdMS_TO_TICKS(300));continue;}if(!networkConnected()||networkProvisioningActive()){if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}if(time(nullptr)<TLS_EPOCH){setState("WAIT_TIME");vTaskDelay(pdMS_TO_TICKS(500));continue;}uint32_t now=millis();bool online=false;if(take()){online=st.transportActive;give();}if(next==0||(!online&&(int32_t)(now-next)>=0)){bool pending=false;String u;setState("ENROLLING");bool ok=enroll(c.portalUrl,u,pending);if(ok&&pending){if(wsStarted){ws.disconnect();wsStarted=false;}next=millis()+RETRY_PENDING;}else if(ok&&!u.isEmpty()){if(!wsStarted||u!=activeWsUrl)startWs(u);next=millis()+RETRY_APPROVED;}else next=millis()+RETRY_ERROR;}if(wsStarted)ws.loop();vTaskDelay(pdMS_TO_TICKS(8));}}
+void clearQueuedRequests(){
+  if(requestQueue){RemoteReq*q=nullptr;while(xQueueReceive(requestQueue,&q,0)==pdTRUE){delete q;}}
+  if(responseQueue){RemoteReply*q=nullptr;while(xQueueReceive(responseQueue,&q,0)==pdTRUE){delete q;}}
 }
 
+void httpWorker(void*){
+  for(;;){
+    RemoteReq*q=nullptr;
+    if(!requestQueue||xQueueReceive(requestQueue,&q,portMAX_DELAY)!=pdTRUE||!q)continue;
+    workerBusy=true;
+    RemoteReply*out=new(std::nothrow)RemoteReply();
+    if(out){
+      out->session=q->session;out->id=q->id;
+      String e;
+      if(!localHttp(q->method,q->path,q->contentType,q->accept,q->body,out->response,e)){
+        out->response.code=502;out->response.type="text/plain; charset=utf-8";out->response.encoding="";
+        out->response.body.assign(e.c_str(),e.c_str()+e.length());
+      }
+      if(!responseQueue||xQueueSend(responseQueue,&out,pdMS_TO_TICKS(250))!=pdTRUE){delete out;if(take()){queueDrops++;give();}}
+    }else if(take()){queueDrops++;give();}
+    delete q;workerBusy=false;
+  }
+}
+
+void queueHttpRequest(const JsonDocument&d,const String&id,uint32_t session){
+  if(!requestQueue){sendErr(id,503,"Worker HTTP remoto non disponibile");return;}
+  RemoteReq*q=new(std::nothrow)RemoteReq();
+  if(!q){sendErr(id,503,"Memoria insufficiente per richiesta remota");return;}
+  q->session=session;q->id=id;q->method=d["method"]|"GET";q->path=d["path"]|"/";
+  const JsonObjectConst headers=d["headers"].as<JsonObjectConst>();q->contentType=hdr(headers,"content-type");q->accept=hdr(headers,"accept");
+  const String bb=d["body_b64"]|"";
+  if(!b64dec(bb,q->body)){delete q;sendErr(id,413,"Request body non valido");return;}
+  if(xQueueSend(requestQueue,&q,0)!=pdTRUE){delete q;if(take()){queueDrops++;give();}sendErr(id,503,"Coda richieste remote piena");return;}
+  if(take()){st.requests++;give();}
+}
+
+void drainReplies(){
+  if(!responseQueue)return;
+  for(uint8_t i=0;i<2;i++){
+    RemoteReply*r=nullptr;if(xQueueReceive(responseQueue,&r,0)!=pdTRUE||!r)break;
+    uint32_t current=0;bool online=false;if(take()){current=wsSession;online=st.transportActive;give();}
+    if(online&&r->session==current)sendResp(r->id,r->response);
+    delete r;
+  }
+}
+
+void wsText(uint8_t*p,size_t n){
+  if(!p||!n||n>MAX_WS)return;JsonDocument d;if(deserializeJson(d,p,n))return;
+  String type=d["type"]|"",id=d["id"]|"";uint32_t session=0;
+  if(take()){st.lastActivityMs=millis();session=wsSession;give();}
+  if(type=="ping"){String x="{\"type\":\"pong\"";if(!id.isEmpty())x+=",\"id\":\""+esc(id)+"\"";x+="}";ws.sendTXT(x);return;}
+  if(type!="http_request"||id.isEmpty())return;
+  // Never execute the local HTTP transaction inside the WebSocket callback.
+  // Queue it and return immediately so ping/pong and WebSocket framing remain live.
+  queueHttpRequest(d,id,session);
+}
+
+void wsEvent(WStype_t t,uint8_t*p,size_t n){
+  if(t==WStype_CONNECTED){
+    if(take()){wsSession++;st.transportActive=true;st.approved=true;st.state="ONLINE";st.wsConnects++;st.lastActivityMs=millis();st.lastWsEvent="CONNECTED";st.lastError="";give();}
+    Serial.println(F("[REMOTE] AdminSensor ONLINE"));
+  }else if(t==WStype_DISCONNECTED){
+    if(take()){bool was=st.transportActive;wsSession++;st.transportActive=false;if(st.configured&&st.approved)st.state="RECONNECT";if(was)st.wsDisconnects++;st.lastWsEvent="DISCONNECTED";give();}
+  }else if(t==WStype_ERROR){if(take()){st.lastWsEvent="ERROR";give();}}
+  else if(t==WStype_TEXT)wsText(p,n);
+  else if(t==WStype_PING||t==WStype_PONG){if(take()){st.lastActivityMs=millis();st.lastWsEvent=t==WStype_PING?"WS_PING":"WS_PONG";give();}}
+}
+
+bool enroll(const String&portal,String&wsUrl,bool&pending){
+  pending=false;wsUrl="";WiFiClientSecure c;c.setCACert(REMOTE_TRUST_CA);c.setTimeout(8000);
+  HTTPClient h;h.setConnectTimeout(7000);h.setTimeout(8000);
+  if(!h.begin(c,portal+"/api/device/enroll")){setState("ERROR","HTTPS enroll init fallita");return false;}
+  h.addHeader("Content-Type","application/json");JsonDocument q;
+  q["device_id"]=remoteDefaultDeviceId();q["device_token"]=token;q["name"]=runtimeConfig.hostname.isEmpty()?"Stazione meteo":runtimeConfig.hostname;q["model"]="ESP32 Davis Weather Gateway";q["firmware_version"]=FIRMWARE_VERSION;
+  String body;serializeJson(q,body);if(take()){st.enrollAttempts++;st.lastWsEvent="ENROLL";give();}
+  int code=h.POST(body);String resp=code>0?h.getString():String();h.end();if(take()){st.lastEnrollHttpCode=code;st.lastActivityMs=millis();give();}
+  if(code<200||code>=300){setState("ERROR",code>0?String("Enroll HTTP ")+code:"Errore TLS/HTTP enroll");return false;}
+  JsonDocument d;if(deserializeJson(d,resp)){setState("ERROR","Risposta enroll JSON non valida");return false;}
+  String s=d["status"]|"";
+  if(s=="pending"){pending=true;if(take()){st.approved=false;st.transportActive=false;st.lastWsEvent="PENDING";give();}setState("PENDING");return true;}
+  if(s!="approved"){if(take()){st.approved=false;st.transportActive=false;st.lastWsEvent="DENIED";give();}setState("DENIED",s.isEmpty()?"Stato enroll mancante":String("Stato portale: ")+s);return false;}
+  wsUrl=d["websocket_url"]|"";UrlParts u;if(!parseUrl(wsUrl,"wss",u)){setState("ERROR","websocket_url WSS non valido");return false;}
+  if(take()){st.approved=true;st.lastError="";st.wsHost=u.host;st.wsPath=u.path;st.lastWsEvent="APPROVED";give();}setState("APPROVED");return true;
+}
+
+bool startWs(const String&url){
+  UrlParts u;if(!parseUrl(url,"wss",u))return false;
+  // Keep the exact transport setup order used by the stable develop branch.
+  ws.disconnect();ws.beginSslWithCA(u.host.c_str(),u.port,u.path.c_str(),REMOTE_TRUST_CA,"");
+  wsAuth="Authorization: Bearer "+token;ws.setExtraHeaders(wsAuth.c_str());ws.setReconnectInterval(5000);ws.enableHeartbeat(30000,5000,2);
+  activeWsUrl=url;wsStarted=true;
+  if(take()){st.wsAttempts++;st.lastWsAttemptMs=millis();st.wsHost=u.host;st.wsPath=u.path;st.lastWsEvent="CONNECTING";give();}
+  setState("CONNECTING");return true;
+}
+
+void task(void*){
+  uint32_t seen=0,next=0;
+  for(;;){
+    RemoteAccessConfig c;if(take()){c=cfg;give();}
+    uint32_t g=generation;bool fr=forceRetry;if(fr)forceRetry=false;
+    if(g!=seen||fr){seen=g;if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;clearQueuedRequests();if(take()){wsSession++;st.transportActive=false;st.approved=false;st.lastWsEvent=fr?"MANUAL_RETRY":"CONFIG_CHANGED";give();}}
+    if(c.portalUrl.isEmpty()){setState("OFF");vTaskDelay(pdMS_TO_TICKS(300));continue;}
+    if(!networkConnected()||networkProvisioningActive()){if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}
+    if(time(nullptr)<TLS_EPOCH){setState("WAIT_TIME");vTaskDelay(pdMS_TO_TICKS(500));continue;}
+    uint32_t now=millis();bool online=false;if(take()){online=st.transportActive;give();}
+    if(next==0||(!online&&(int32_t)(now-next)>=0)){
+      bool pending=false;String u;setState("ENROLLING");bool ok=enroll(c.portalUrl,u,pending);
+      if(ok&&pending){if(wsStarted){ws.disconnect();wsStarted=false;}next=millis()+RETRY_PENDING;}
+      else if(ok&&!u.isEmpty()){if(!wsStarted||u!=activeWsUrl)startWs(u);next=millis()+RETRY_APPROVED;}
+      else next=millis()+RETRY_ERROR;
+    }
+    if(wsStarted){ws.loop();drainReplies();}
+    vTaskDelay(pdMS_TO_TICKS(8));
+  }
+}
+} // namespace
+
 String remoteDefaultDeviceId(){static String id=makeId();return id;}
-void initRemoteAccess(){if(!mux)mux=xSemaphoreCreateMutex();load();if(take()){st=RemoteAccessStatus{};st.initialized=true;st.configured=!cfg.portalUrl.isEmpty();st.deviceId=remoteDefaultDeviceId();st.state=cfg.portalUrl.isEmpty()?"OFF":"WAIT_NETWORK";give();}ws.onEvent(wsEvent);if(!taskHandle&&xTaskCreate(task,"adminsensor",12288,nullptr,1,&taskHandle)!=pdPASS){taskHandle=nullptr;setState("ERROR","Task remoto non avviato");}Serial.print(F("[REMOTE] Device ID: "));Serial.println(remoteDefaultDeviceId());Serial.println(F("[REMOTE] Token in NVS (non mostrato)"));}
-RemoteAccessConfig getRemoteAccessConfig(){RemoteAccessConfig o;if(take()){o=cfg;give();}return o;}RemoteAccessStatus getRemoteAccessStatus(){RemoteAccessStatus o;if(take()){o=st;give();}return o;}
-bool saveRemoteAccessPortalUrl(const String&in){String u=in;if(!normalizePortal(u))return false;Preferences p;if(!p.begin(NVS_NS,false))return false;p.putString(NVS_URL,u);p.end();if(take()){cfg.portalUrl=u;st.configured=!u.isEmpty();st.approved=false;st.transportActive=false;st.state=u.isEmpty()?"OFF":"WAIT_NETWORK";st.lastError="";give();}generation++;return true;}
-bool resetRemoteAccessConfig(){return saveRemoteAccessPortalUrl("");}void retryRemoteAccessNow(){forceRetry=true;}
+void initRemoteAccess(){
+  if(!mux)mux=xSemaphoreCreateMutex();
+  if(!requestQueue)requestQueue=xQueueCreate(HTTP_QUEUE_LEN,sizeof(RemoteReq*));
+  if(!responseQueue)responseQueue=xQueueCreate(HTTP_QUEUE_LEN,sizeof(RemoteReply*));
+  load();
+  if(take()){st=RemoteAccessStatus{};st.initialized=true;st.configured=!cfg.portalUrl.isEmpty();st.deviceId=remoteDefaultDeviceId();st.state=cfg.portalUrl.isEmpty()?"OFF":"WAIT_NETWORK";st.lastWsEvent="INIT";give();}
+  ws.onEvent(wsEvent);
+  if(!workerHandle&&requestQueue&&responseQueue&&xTaskCreate(httpWorker,"remote-http",7168,nullptr,1,&workerHandle)!=pdPASS){workerHandle=nullptr;setState("ERROR","Worker HTTP remoto non avviato");}
+  if(!taskHandle&&xTaskCreate(task,"adminsensor",12288,nullptr,1,&taskHandle)!=pdPASS){taskHandle=nullptr;setState("ERROR","Task remoto non avviato");}
+  Serial.print(F("[REMOTE] Device ID: "));Serial.println(remoteDefaultDeviceId());Serial.println(F("[REMOTE] Token in NVS (non mostrato)"));
+}
+RemoteAccessConfig getRemoteAccessConfig(){RemoteAccessConfig o;if(take()){o=cfg;give();}return o;}
+RemoteAccessStatus getRemoteAccessStatus(){RemoteAccessStatus o;if(take()){o=st;give();}return o;}
+bool saveRemoteAccessPortalUrl(const String&in){String u=in;if(!normalizePortal(u))return false;Preferences p;if(!p.begin(NVS_NS,false))return false;p.putString(NVS_URL,u);p.end();if(take()){cfg.portalUrl=u;st.configured=!u.isEmpty();st.approved=false;st.transportActive=false;st.state=u.isEmpty()?"OFF":"WAIT_NETWORK";st.lastError="";st.lastWsEvent="CONFIG_SAVED";give();}generation++;return true;}
+bool resetRemoteAccessConfig(){return saveRemoteAccessPortalUrl("");}
+void retryRemoteAccessNow(){forceRetry=true;}
 String remoteAccessConfigJson(){RemoteAccessConfig c=getRemoteAccessConfig();String j="{\"portal_url\":\""+esc(c.portalUrl)+"\",\"device_id\":\""+esc(remoteDefaultDeviceId())+"\",\"has_token\":";j+=validToken(token)?"true":"false";j+=",\"identity_managed_by_firmware\":true}";return j;}
-String remoteAccessStatusJson(){RemoteAccessStatus s=getRemoteAccessStatus();String j="{\"initialized\":";j+=s.initialized?"true":"false";j+=",\"configured\":";j+=s.configured?"true":"false";j+=",\"approved\":";j+=s.approved?"true":"false";j+=",\"transport_active\":";j+=s.transportActive?"true":"false";j+=",\"state\":\""+esc(s.state)+"\",\"device_id\":\""+esc(s.deviceId)+"\",\"enroll_attempts\":"+String(s.enrollAttempts)+",\"last_enroll_http_code\":"+String(s.lastEnrollHttpCode)+",\"ws_connects\":"+String(s.wsConnects)+",\"ws_disconnects\":"+String(s.wsDisconnects)+",\"requests\":"+String(s.requests)+",\"responses\":"+String(s.responses)+",\"last_activity_age_ms\":"+(s.lastActivityMs?String((uint32_t)(millis()-s.lastActivityMs)):String("null"))+",\"last_error\":\""+esc(s.lastError)+"\"}";return j;}
+String remoteAccessStatusJson(){
+  RemoteAccessStatus s=getRemoteAccessStatus();
+  String j="{\"initialized\":";j+=s.initialized?"true":"false";j+=",\"configured\":";j+=s.configured?"true":"false";j+=",\"approved\":";j+=s.approved?"true":"false";j+=",\"transport_active\":";j+=s.transportActive?"true":"false";
+  j+=",\"state\":\""+esc(s.state)+"\",\"device_id\":\""+esc(s.deviceId)+"\",\"enroll_attempts\":"+String(s.enrollAttempts)+",\"last_enroll_http_code\":"+String(s.lastEnrollHttpCode);
+  j+=",\"ws_attempts\":"+String(s.wsAttempts)+",\"ws_connects\":"+String(s.wsConnects)+",\"ws_disconnects\":"+String(s.wsDisconnects)+",\"ws_handshake_failures\":"+String(s.wsHandshakeFailures);
+  j+=",\"ws_host\":\""+esc(s.wsHost)+"\",\"ws_path\":\""+esc(s.wsPath)+"\",\"last_ws_event\":\""+esc(s.lastWsEvent)+"\"";
+  j+=",\"requests\":"+String(s.requests)+",\"responses\":"+String(s.responses)+",\"http_queue\":"+String(requestQueue?uxQueueMessagesWaiting(requestQueue):0)+",\"http_worker_busy\":"+(workerBusy?String("true"):String("false"))+",\"queue_drops\":"+String(queueDrops);
+  j+=",\"last_activity_age_ms\":"+(s.lastActivityMs?String((uint32_t)(millis()-s.lastActivityMs)):String("null"))+",\"last_error\":\""+esc(s.lastError)+"\"}";
+  return j;
+}

@@ -1,60 +1,53 @@
 # ESP32 Davis Weather Gateway - Documentation Index
 
-Current firmware baseline on `develop`: **`0.3.2-dev`**.
+Current firmware baseline on `develop`: **`0.4.0-dev`**.
 
-This directory contains both current project documentation and historical RF guide editions. The firmware remains under field validation against real Davis Vantage Pro2 / Pro2 Plus EU hardware.
+This documentation describes ESP32 Davis Weather Gateway as a standalone Davis Vantage Pro2 / Pro2 Plus EU 868 MHz project.
 
-## Current documentation for 0.3.2-dev
+## Current documentation
 
 ### Architecture and operation
 
-- [`ARCHITECTURE_0.3.md`](ARCHITECTURE_0.3.md) - application architecture updated for 0.3.2, service order, RF boundary, NVS and reset levels.
-- [`OLED_DISPLAY.md`](OLED_DISPLAY.md) - onboard SSD1306 display, boot status, DAVIS SEARCH and raw-frame display.
+- [`ARCHITECTURE_0.4.md`](ARCHITECTURE_0.4.md) - current service architecture, RF isolation, SPI/I²C layout, storage and remote-ready design.
+- [`OLED_DISPLAY.md`](OLED_DISPLAY.md) - SSD1306 boot/runtime display and Davis acquisition diagnostics.
 - [`MQTT.md`](MQTT.md) - MQTT configuration and telemetry.
-- [`AS3935.md`](AS3935.md) - optional AS3935 lightning detector.
+- [`AS3935.md`](AS3935.md) - optional lightning detector.
+- [`SD_DATALOGGER.md`](SD_DATALOGGER.md) - microSD/SdFat storage, CSV format, retry and API.
+- [`REMOTE_ACCESS.md`](REMOTE_ACCESS.md) - outbound TLS relay security model and current readiness state.
 
 ### Davis RF and diagnostics
 
 - [`RF_PROTOCOL_IT.md`](RF_PROTOCOL_IT.md) - Davis RF protocol notes in Italian.
 - [`RF_PROTOCOL_EN.md`](RF_PROTOCOL_EN.md) - Davis RF protocol notes in English.
-- [`DIAGNOSTICS_IT.md`](DIAGNOSTICS_IT.md) - extended 0.3.2 diagnostics, 5-channel statistics, RAW/NORMALIZED/CRC, timing, 60-second capture and reset procedures.
-- [`DIAGNOSTICS_EN.md`](DIAGNOSTICS_EN.md) - English extended diagnostics.
+- [`DIAGNOSTICS_IT.md`](DIAGNOSTICS_IT.md) - extended five-channel diagnostics, RAW/NORMALIZED/CRC, timing and capture workflow.
+- [`DIAGNOSTICS_EN.md`](DIAGNOSTICS_EN.md) - English diagnostics guide.
 
-### Licensing, attribution and project governance
+The current real-hardware setup successfully receives Davis station data. Diagnostic tools remain available for RF quality and long-term monitoring.
 
-- [`LICENSING_IT.md`](LICENSING_IT.md) - Italian licensing/provenance guide.
-- [`LICENSING_EN.md`](LICENSING_EN.md) - English licensing/provenance guide.
-- [`BRANCH_POLICY.md`](BRANCH_POLICY.md) - `develop -> main` promotion model and protected-main policy.
-- Repository root [`NOTICE.md`](../NOTICE.md) - project copyright, provenance and trademark disclaimer.
-- Repository root [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) - public protocol references and third-party attribution.
-- Repository root [`LICENSE`](../LICENSE) - GNU LGPL v3.0.
+### Licensing and governance
 
-## Historical PDF RF guides
+- [`LICENSING_IT.md`](LICENSING_IT.md) - Italian licensing/attribution guide.
+- [`LICENSING_EN.md`](LICENSING_EN.md) - English licensing/attribution guide.
+- [`BRANCH_POLICY.md`](BRANCH_POLICY.md) - protected-main development model.
+- [`../NOTICE.md`](../NOTICE.md) - project copyright and trademark disclaimer.
+- [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) - software dependencies and Davis interoperability references.
+- [`../SECURITY.md`](../SECURITY.md) - security policy.
 
-The following PDFs document earlier stages of the Davis RF work and are kept for project history:
+## Historical documentation
 
-- `Davis_RF_Protocol_Guide_IT_v1.0.pdf`
-- `Davis_RF_Protocol_Guide_EN_v1.0.pdf`
-- `Davis_RF_Protocol_Guide_IT_v1.1.pdf`
-- `Davis_RF_Protocol_Guide_EN_v1.1.pdf`
+`ARCHITECTURE_0.3.md` and the RF PDF guides v1.0/v1.1 document earlier development stages and are kept for project history.
 
-They should not be treated as the complete description of the current 0.3.2 application layer. For live diagnostics, OLED, MQTT, AS3935, reset behaviour and current licensing/provenance, use the Markdown documents listed above.
+The root graphical Technical Guide v1.2 predates the 0.4 microSD and remote-ready application layer. For the current firmware, the Markdown documents indexed here are authoritative until a newer unified graphical guide is released.
 
-## Unified technical guide
+## Information classification
 
-The repository also contains source material under `tools/technical_guide_*.py` for the unified graphical technical guide. Until a newer generated edition is explicitly published and linked from this index, the current Markdown documentation is authoritative for firmware changes after the historical RF PDFs.
+Documentation distinguishes:
 
-## Validation labels
+- vendor-published Davis data;
+- behaviour implemented by this project;
+- public interoperability/reverse-engineering information;
+- hardware-dependent or still-to-be-validated behaviour.
 
-Documentation uses the following practical distinction:
+## License
 
-- **official/vendor data** - values explicitly published by Davis Instruments;
-- **project implementation** - behaviour implemented in this repository;
-- **reverse-engineered/interoperability information** - public protocol knowledge not published as an official Davis specification;
-- **field validation required** - behaviour that still needs confirmation against real hardware.
-
-## RF scope guarantee
-
-The weather RF engine in this repository is **Davis Vantage Pro2 EU 868 MHz FHSS / 2-FSK only**.
-
-The application layer may share design patterns with the maintainer's Oregon/Technoline gateway, but this Davis repository does not include Oregon Scientific, Technoline/LaCrosse or 433 MHz weather decoders.
+Project-original documentation is licensed under `LGPL-3.0-only` unless a file states otherwise. Third-party specifications, software and trademarks remain under their respective ownership/licenses.

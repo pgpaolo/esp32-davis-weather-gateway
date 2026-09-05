@@ -18,11 +18,9 @@ Modified versions should clearly identify substantial changes and must not be pr
 
 ## Project provenance
 
-The Davis RF receiver/decoder in this repository is an independent ESP32/SX1276 implementation based on publicly documented interoperability facts and historical reverse-engineering references. The project does not intentionally vendor source code from DavisRFM69 or ISS-MQTT-Gateway.
+The Davis RF receiver/decoder in this repository is an independent ESP32/SX1276 implementation based on publicly documented interoperability facts, observed packet behaviour and historical Davis reverse-engineering references documented in `THIRD_PARTY_NOTICES.md`.
 
-The Web UI, OLED, MQTT, BME280, AS3935 and diagnostic application-layer design evolved from patterns previously used in the maintainer's Oregon/Technoline gateway project. The Davis repository intentionally excludes the Oregon Scientific and Technoline/LaCrosse weather decoders and any third-party GPL-derived decoder portions associated with them.
-
-Detailed provenance and reference notes are maintained in `THIRD_PARTY_NOTICES.md` and `docs/LICENSING_IT.md` / `docs/LICENSING_EN.md`.
+The Web UI, OLED display, microSD datalogger, MQTT integration, BME280 support, AS3935 support, diagnostics and remote-access preparation are maintained as components of this project.
 
 ## Trademarks and non-affiliation
 
@@ -34,4 +32,4 @@ Protocol notes identified as reverse-engineered, inferred or requiring field val
 
 ## Warranty
 
-The software and documentation are provided under the warranty disclaimers contained in the GNU LGPLv3/GPLv3. Weather, RF, lightning and pressure data produced by this development firmware must be independently validated before use in safety-critical, operational or commercial decision-making.
+The software and documentation are provided under the warranty disclaimers contained in the GNU LGPLv3/GPLv3. Weather, RF, lightning and pressure data should be independently validated before use in safety-critical, operational or commercial decision-making.

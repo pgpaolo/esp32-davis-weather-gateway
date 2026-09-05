@@ -1,41 +1,33 @@
 # Third-Party Notices and Protocol References
 
-ESP32 Davis Weather Gateway uses third-party libraries and public interoperability references. Those components and references remain subject to their own licenses and are **not relicensed** by this repository.
+ESP32 Davis Weather Gateway uses third-party libraries and public interoperability references. Those components remain subject to their own licenses and are **not relicensed** by this repository.
 
 The repository license applies only to project-original material unless a file states otherwise.
 
 ## Direct software dependencies
 
-The firmware currently depends on libraries declared in `platformio.ini`, including RadioLib, U8g2, Adafruit BME280/Unified Sensor/BusIO, PubSubClient and AS3935MI. These projects remain under their respective upstream licenses and copyright notices.
+The firmware dependencies declared in `platformio.ini` include:
 
-No ownership or relicensing claim is made over those dependencies.
+- **RadioLib** - SX1276/RFM95 radio control;
+- **U8g2** - SSD1306 OLED rendering;
+- **Adafruit BME280 / Unified Sensor / BusIO** - local environmental sensor support;
+- **PubSubClient** - MQTT client;
+- **SdFat** - microSD filesystem and SPI storage backend;
+- **AS3935MI** - optional AS3935 lightning detector support;
+- ESP32 / Arduino framework components supplied by the PlatformIO Espressif32 platform.
 
-## Public Davis protocol / reverse-engineering references
+These projects remain under their respective upstream licenses and copyright notices. No ownership or relicensing claim is made over those dependencies.
+
+## Public Davis protocol / interoperability references
 
 Historical public work used as technical/interoperability reference includes:
 
-- **DavisRFM69** by DeKay — historical Davis ISS/RFM69 reverse-engineering work; its repository notices identify CC BY-SA 3.0 material.
-- **ISS-MQTT-Gateway** by dcbo — ESP32/RFM69 Davis ISS receiver project; its repository metadata identifies GPL-3.0 licensing.
+- **DavisRFM69** by DeKay - historical Davis ISS/RFM69 reverse-engineering work; its repository notices identify CC BY-SA 3.0 material.
+- **ISS-MQTT-Gateway** by dcbo - ESP32/RFM69 Davis ISS receiver project; its repository metadata identifies GPL-3.0 licensing.
 
 These projects are cited as protocol/interoperability references. This repository is intended to contain an independent ESP32/SX1276 implementation and does not intentionally vendor their source files.
 
-Protocol parameters, observed frame layouts and interoperability facts are documented so behaviour can be tested against real hardware. Where a formula, packet interpretation or synchronization behaviour has not yet been confirmed on physical Davis hardware, the documentation marks it as reverse-engineered, inferred or requiring validation.
-
-## Relationship with the Oregon / Technoline gateway project
-
-The maintainer previously developed an ESP32 Oregon Scientific + Technoline weather gateway. Its application-layer concepts — Web dashboard, OLED status, MQTT integration, BME280 handling, AS3935 management and diagnostic workflows — were used as a design reference when expanding this Davis project.
-
-For this Davis repository:
-
-- the **weather RF engine is Davis-only**;
-- no Oregon Scientific receiver/decoder is included;
-- no Technoline/LaCrosse receiver/decoder is included;
-- no 433 MHz weather mode is included;
-- GPL-derived decoder portions associated with `rtl_433` or PracticalArduino in the other project were **not imported** into the Davis RF engine.
-
-Where project-original application-layer work is owned by the same maintainer and was adapted or reimplemented here, it is distributed in this repository under `LGPL-3.0-only` where the maintainer has the right to do so.
-
-This distinction mirrors the attribution practice used in the Oregon/Technoline project: provenance is preserved explicitly, while code subject to incompatible or unrelated third-party licensing is not silently absorbed into the Davis project.
+Protocol parameters, observed frame layouts and interoperability facts are documented so behaviour can be tested against real hardware. Where a formula or packet interpretation is not an official Davis specification, the documentation identifies it as project implementation or reverse-engineered interoperability information.
 
 ## Davis trademarks
 

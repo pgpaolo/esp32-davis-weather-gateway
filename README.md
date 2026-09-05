@@ -5,30 +5,27 @@
 [![Build firmware](https://github.com/pgpaolo/esp32-davis-weather-gateway/actions/workflows/build.yml/badge.svg)](https://github.com/pgpaolo/esp32-davis-weather-gateway/actions/workflows/build.yml)
 ![License: LGPL v3](https://img.shields.io/badge/License-LGPL_v3-blue.svg)
 
-Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis Vantage Pro2 / Pro2 Plus wireless europea**, senza console Davis e senza Meteobridge.
+Gateway autonomo **ESP32/LILYGO 868 MHz** per ricevere direttamente una **Davis Vantage Pro2 / Pro2 Plus wireless europea**, aggiungere sensori locali e distribuire i dati via Web, MQTT, HTTP e microSD.
 
-> **Confine architetturale:** il motore radio resta esclusivamente **DAVIS Vantage Pro2 EU 868 MHz FHSS / 2-FSK**. Web UI, OLED, MQTT, BME280, AS3935 e diagnostica sono servizi applicativi e non introducono decoder Oregon Scientific, Technoline/LaCrosse o modalità meteo RF 433 MHz.
-
-`develop` è il branch di integrazione attivo. `main` contiene stati revisionati e promossi tramite Pull Request con CI verde.
+`develop` è il branch di integrazione attivo. `main` contiene gli stati promossi tramite Pull Request e CI.
 
 ## Stato del progetto
 
-Versione di sviluppo corrente: **`0.3.2-dev`**.
+Versione di sviluppo corrente: **`0.4.0-dev`**.
 
-La CI compila entrambi i target LILYGO supportati. Il decoder RF Davis continua a richiedere validazione sul campo contro una ISS reale prima di dichiarare una release stabile.
+La ricezione Davis EU 868 MHz/FHSS è stata collaudata con successo sull'attuale configurazione hardware reale e il gateway acquisisce i dati della stazione. La 0.4.0-dev mantiene invariato il motore RF e introduce un nuovo livello applicativo: microSD, nuova Web UI e predisposizione sicura per collegamento remoto.
 
-La 0.3.2 aggiunge diagnostica RF/FHSS estesa senza modificare il decoder Davis o la sequenza dei cinque hop.
+Le nuove funzioni SD e remote-ready devono essere validate sul dispositivo prima della promozione a release stabile.
 
-## Hardware target
+## Hardware
 
-- LILYGO / TTGO LoRa32 T3 V1.6.1 con **SX1276/RFM95 868 MHz**
+- LILYGO / TTGO LoRa32 T3 V1.6.1 + SX1276/RFM95 868 MHz
 - LILYGO T3-S3 + SX1276/RFM95 868 MHz
-- OLED integrato **SSD1306 128x64 I2C, 0x3C**
-- Davis Vantage Pro2 / Pro2 Plus wireless EU ISS
-- **BME280** I2C per barometro lato ricevitore e T/H locale
-- **AS3935** I2C opzionale per rilevamento fulmini
-
-Il bus I2C condiviso OLED/BME280/AS3935 viene mantenuto a **100 kHz**.
+- Davis Vantage Pro2 / Pro2 Plus wireless EU
+- OLED SSD1306 128x64 I²C `0x3C`
+- BME280 opzionale/locale per pressione e T/H lato ricevitore
+- AS3935 opzionale per rilevamento fulmini
+- microSD onboard tramite bus SPI dedicato
 
 ## Architettura
 
@@ -41,165 +38,127 @@ Davis ISS EU 868 MHz FHSS
           v
        ESP32
           |
-          +-- Davis decoder / FHSS   <-- unico motore RF meteo
-          +-- OLED 128x64            <-- dati + ricerca/diagnostica live
-          +-- BME280                 <-- barometro lato ricevitore
-          +-- AS3935                 <-- fulmini, I2C + IRQ
-          +-- Web UI / diagnostica estesa
-          +-- MQTT opzionale
-          +-- HTTP mb.php opzionale
+          +-- decoder Davis / FHSS
+          +-- OLED 128x64
+          +-- BME280
+          +-- AS3935
+          +-- microSD datalogger
+          +-- Web UI / diagnostica
+          +-- MQTT
+          +-- HTTP upload
+          +-- profilo remote-ready TLS
           +-- NVS / provisioning Wi-Fi
 ```
 
-`serviceDavisRadio()` conserva la prima priorità nel loop. Display, Web, MQTT e sensori ausiliari non modificano hopping, modulazione o decoder Davis.
+Il percorso RF Davis conserva la massima priorità nel loop. Nessuna funzione applicativa modifica frequenze, CRC, packet mapping o logica FHSS.
 
-Vedere [docs/ARCHITECTURE_0.3.md](docs/ARCHITECTURE_0.3.md).
+## Web UI 0.4
 
-## OLED e ricerca Davis
+La dashboard è stata riorganizzata graficamente con:
 
-All'avvio l'OLED mostra configurazione/NVS, rete, BME280, AS3935/MQTT e inizializzazione radio. Durante la ricerca alterna **DAVIS SEARCH** e **DAVIS RX RAW** mostrando canale/frequenza, RSSI, contatori, ultimo frame grezzo e stato CRC.
+- panoramica meteo più leggibile;
+- stato RF e ultimo aggiornamento in evidenza;
+- sezioni separate per vento, pioggia, pressione, UV/solare e sensori locali;
+- badge live `NET / RF / BME / SD / MQTT / AS3935 / REMOTE`;
+- pagina Hardware più compatta;
+- Configurazione divisa per Stazione, Rete, HTTP, MQTT, microSD, AS3935, Remote e Sistema;
+- diagnostica RF completa mantenuta.
 
-Dopo il lock ruota fra meteo, vento/pioggia, barometro, RF/FHSS, AS3935 e stato gateway. Se il traffico diventa stale o il lock viene perso, ritorna automaticamente alla ricerca.
+L'HTML non è più incorporato come stringa C++ grezza: `web/dashboard.html` viene compresso in gzip durante la build tramite `scripts/generate_web_ui.py`.
 
-Vedere [docs/OLED_DISPLAY.md](docs/OLED_DISPLAY.md).
+## microSD datalogger
 
-## Diagnostica RF estesa 0.3.2
+Il datalogger è **disabilitato di default** e usa SdFat su un bus SPI dedicato, separato dalla radio.
 
-La pagina **Diagnostica** serve a capire dove si interrompe la catena di ricezione prima di modificare il decoder.
+Caratteristiche principali:
 
-Espone:
+- coda RAM fissa per evitare scritture filesystem nel percorso RF;
+- file CSV giornalieri UTC in `/weather/YYYY/MM/YYYY-MM-DD.csv`;
+- `/weather/unsynced.csv` prima della sincronizzazione dell'orologio;
+- logging opzionale di frame Davis RAW/NORMALIZED, snapshot meteo, BME280 e AS3935;
+- retry automatico non bloccante se la scheda manca o il mount fallisce;
+- mount a 4 MHz con fallback a 400 kHz;
+- diagnostica SdFat con capacità, spazio usato, errori, coda e file corrente;
+- formattazione FAT solo tramite azione Web esplicita e doppia conferma.
 
-- stati `ERROR / SEARCH / CANDIDATE / SYNC`;
-- statistiche separate per tutti i cinque canali Davis EU;
-- RAW, NORMALIZED, CRC ricevuto e CRC calcolato;
-- ring buffer RAM degli ultimi **24 frame**;
-- RSSI ultimo/medio/min/max per canale;
-- timing, min/max/media e jitter rispetto ai circa 2555 ms attesi;
-- IRQ DIO0, `readData()`, tune, hop, miss streak e codici RadioLib;
-- health ESP32: uptime, heap libero/minimo, CPU, Wi-Fi RSSI e reset reason;
-- pulsante **Diagnostic capture 60 s**;
-- report testuale scaricabile `davis-diagnostic.txt`.
+Pin microSD:
 
-Interpretazione rapida:
+| Board | MOSI | MISO | SCLK | CS |
+|---|---:|---:|---:|---:|
+| T3 V1.6.1 | 15 | 2 | 14 | 13 |
+| T3-S3 V1.2/V1.3 | 11 | 2 | 14 | 13 |
 
-- `RAW = 0`: nessun frame candidato arriva al percorso radio;
-- `RAW > 0` ma `CRC KO`: segnale presente, verificare framing/bit order/CRC;
-- `CRC OK` ma nessun `SYNC`: verificare ID ISS e continuità FHSS;
-- `SYNC`: ricezione Davis sostanzialmente acquisita.
+Vedere [docs/SD_DATALOGGER.md](docs/SD_DATALOGGER.md).
 
-Vedere [docs/DIAGNOSTICS_IT.md](docs/DIAGNOSTICS_IT.md) e [docs/DIAGNOSTICS_EN.md](docs/DIAGNOSTICS_EN.md).
+## Accesso remoto: predisposizione 0.4
 
-## Dati meteo e pressione
+La 0.4.0-dev introduce la configurazione per un futuro **relay outbound TLS**, disabilitata di default.
 
-Dalla Davis ISS: temperatura/umidità esterne, vento, direzione, raffica, pioggia/rain rate, UV, radiazione solare e flag batteria trasmettitore.
+Il gateway non apre porte Internet e non espone automaticamente la Web UI. Vengono predisposti in NVS:
 
-Dal gateway: pressione BME280 assoluta e ridotta al livello del mare, T/H locale, trend barometrico, previsione indicativa e dati/eventi AS3935.
+- URL relay HTTPS;
+- Device ID;
+- token per dispositivo;
+- CA del relay;
+- intervallo heartbeat futuro;
+- flag separato per eventuale amministrazione remota.
 
-Per la **Vantage Pro2 Sensor Suite 6322/6322M** il barometro non è nell'ISS esterna. Nell'ecosistema Davis la misura barometrica è lato ricevente; il gateway segue la stessa architettura usando un BME280 locale.
+Token e CA non vengono restituiti alla Web UI. In questa versione lo stato `READY` significa che il profilo è completo; **il tunnel remoto non è ancora attivo**. Il trasporto verrà implementato insieme al servizio relay, preferibilmente con connessione outbound TLS/WSS e sessioni autorizzate lato server.
 
-## RF Davis EU
+Vedere [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
 
-Il ricevitore usa 2-FSK a 19.2 kbps, deviazione 4.8 kHz, Gaussian BT=0.5, sync `CB 89` e frame fisso di 10 byte con CRC Davis verificato in software.
+## OLED e diagnostica Davis
 
-Hop set EU implementato:
+Durante la ricerca l'OLED alterna `DAVIS SEARCH` e `DAVIS RX RAW`. Dopo la sincronizzazione ruota fra meteo, vento/pioggia, barometro, RF, AS3935 e stato gateway.
 
-1. 868.066711 MHz
-2. 868.297119 MHz
-3. 868.527466 MHz
-4. 868.181885 MHz
-5. 868.412292 MHz
+La Web diagnostica espone i cinque canali Davis, RAW/NORMALIZED, CRC ricevuto/calcolato, history degli ultimi frame, RSSI, timing/jitter, IRQ e report scaricabile.
 
-**Non sono presenti** `oregon_receiver`, decoder Oregon Scientific, decoder Technoline/LaCrosse o modalità RF meteo 433 MHz.
+Vedere [docs/OLED_DISPLAY.md](docs/OLED_DISPLAY.md) e [docs/DIAGNOSTICS_IT.md](docs/DIAGNOSTICS_IT.md).
 
-## Web UI e API
+## Pressione
 
-La dashboard dark/tabbed espone Dashboard, Hardware, Configurazione e Diagnostica, con stato **NET / RF / BME / MQTT / AS3935**.
+Per la Vantage Pro2 Sensor Suite 6322/6322M la pressione barometrica è una misura lato ricevitore. Il gateway usa un BME280 locale e gestisce pressione assoluta, riduzione al livello del mare, trend e indicazione barometrica.
 
-API principali:
+## MQTT e HTTP
 
-- `/api/state` e `/api/status`
-- `/api/rf`
-- `/api/rf/diagnostics`
-- `POST /api/rf/reset`
-- `/api/diag/report`
-- `/api/system`
-- `/api/bme` e `/api/i2c/scan`
-- API AS3935 e MQTT
-- `/api/config`
-- `/api/meteobridge`
+MQTT è opzionale e disabilitato di default. Supporta plain MQTT, TLS con CA verificata e TLS insecure solo come scelta esplicita.
 
-La Web UI è destinata a una **LAN fidata** e non deve essere esposta direttamente su Internet senza autenticazione/proxy appropriato.
+L'upload HTTP usa un endpoint configurabile; il firmware pubblico non contiene URL specifici di installazione. HTTPS verifica il certificato per default.
 
-## MQTT e AS3935
+## Primo avvio
 
-MQTT è disabilitato di default e supporta plain MQTT, TLS con CA verificata e insecure TLS solo come opt-in esplicito.
+Senza Wi-Fi salvato il gateway crea `DavisGateway-XXXX` e apre il captive portal su `http://192.168.4.1`. DHCP è il default; `192.168.1.120` è solo un profilo statico suggerito.
 
-AS3935 è opzionale e configurabile via Web/NVS. Sul T3 V1.6.1 il default usa `0x03` e IRQ GPIO34; sul T3-S3 resta disabilitato di default finché non viene validato un GPIO IRQ libero.
-
-Vedere [docs/MQTT.md](docs/MQTT.md) e [docs/AS3935.md](docs/AS3935.md).
-
-## Primo avvio, Wi-Fi e reset
-
-Se non esiste una configurazione valida il gateway crea `DavisGateway-XXXX` e apre il captive portal su `http://192.168.4.1`. DHCP è il default; `192.168.1.120` è solo il profilo statico suggerito. Dopo 60 s senza rete viene attivato il recovery portal.
-
-Livelli di reset correnti:
-
-- `POST /api/rf/reset` / capture 60 s: azzera solo la diagnostica RF;
-- **Reset rete**: cancella il profilo Wi-Fi/rete e torna al provisioning;
-- Reset MQTT: cancella solo la configurazione MQTT;
-- Reset AS3935: cancella solo la configurazione fulmini;
-- reset flash completo: `esptool erase_flash` seguito da nuovo upload firmware.
-
-La 0.3.2-dev non include ancora un pulsante Web di factory reset totale. La procedura completa è documentata in [docs/DIAGNOSTICS_IT.md](docs/DIAGNOSTICS_IT.md).
-
-## HTTP / mb.php
-
-Il firmware pubblico non contiene endpoint specifici. Ogni installazione configura il proprio receiver; HTTPS verifica il certificato per default e la modalità insecure richiede opt-in esplicito.
-
-## Build PlatformIO
+## Build
 
 ```bash
 pio run -e t3-v161-868
 pio run -e t3-s3-868
 ```
 
-La CI compila entrambe le board con OLED/U8g2, Web, diagnostica estesa, MQTT, BME280 e AS3935.
+La CI compila entrambi i target con radio Davis, OLED, BME280, AS3935, MQTT, microSD/SdFat e Web UI gzip.
 
 ## Documentazione
 
-L'indice aggiornato della documentazione di `develop` è in [docs/README.md](docs/README.md).
+Indice corrente: [docs/README.md](docs/README.md)
 
 Documenti principali:
 
-- [Diagnostica estesa Davis](docs/DIAGNOSTICS_IT.md)
-- [Extended Davis diagnostics](docs/DIAGNOSTICS_EN.md)
-- [OLED display e ricerca Davis](docs/OLED_DISPLAY.md)
-- [Architettura applicativa 0.3.2](docs/ARCHITECTURE_0.3.md)
+- [Architettura 0.4](docs/ARCHITECTURE_0.4.md)
+- [microSD datalogger](docs/SD_DATALOGGER.md)
+- [Accesso remoto](docs/REMOTE_ACCESS.md)
+- [Diagnostica Davis](docs/DIAGNOSTICS_IT.md)
+- [OLED](docs/OLED_DISPLAY.md)
 - [MQTT](docs/MQTT.md)
-- [AS3935 Lightning](docs/AS3935.md)
-- [Note protocollo RF - Italiano](docs/RF_PROTOCOL_IT.md)
-- [RF protocol notes - English](docs/RF_PROTOCOL_EN.md)
-- [Licenza e provenance - Italiano](docs/LICENSING_IT.md)
-- [Licensing and provenance - English](docs/LICENSING_EN.md)
+- [AS3935](docs/AS3935.md)
+- [Protocollo RF IT](docs/RF_PROTOCOL_IT.md)
+- [RF protocol EN](docs/RF_PROTOCOL_EN.md)
+- [Licenza e attribuzioni](docs/LICENSING_IT.md)
 
-Le vecchie guide PDF RF v1.0/v1.1 sono mantenute come storico e non descrivono da sole l'intero firmware 0.3.2.
-
-## Licenza, attribuzioni e provenance
+## Licenza
 
 Copyright (C) 2026 **Gianpaolo P. (`@pgpaolo`) e contributori**.
 
-Il codice e la documentazione originali del progetto sono distribuiti, salvo diversa indicazione, sotto **GNU LGPL v3.0 only (`LGPL-3.0-only`)**.
-
-La stessa regola di trasparenza adottata nell'altro progetto Oregon/Technoline viene mantenuta qui: provenienza e attribuzioni dei riferimenti tecnici sono documentate esplicitamente, senza importare nel motore Davis i decoder GPL Oregon/Technoline o le relative parti `rtl_433` / PracticalArduino.
-
-Il testo ufficiale LGPL non viene modificato. Le personalizzazioni e attribuzioni del progetto sono separate in:
-
-- [LICENSE](LICENSE)
-- [NOTICE.md](NOTICE.md)
-- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-- [docs/LICENSING_IT.md](docs/LICENSING_IT.md)
-- [docs/LICENSING_EN.md](docs/LICENSING_EN.md)
+Il materiale originale del progetto è distribuito sotto **GNU LGPL v3.0 only (`LGPL-3.0-only`)**, salvo diversa indicazione. Il testo ufficiale GNU resta invariato; copyright, attribuzioni, riferimenti di terzi e disclaimer sono mantenuti separatamente in `NOTICE.md` e `THIRD_PARTY_NOTICES.md`.
 
 Davis Instruments, Vantage Pro2 e gli altri marchi citati appartengono ai rispettivi titolari. Questo progetto è indipendente e non è affiliato o approvato da Davis Instruments.
-
-Vedere anche [SECURITY.md](SECURITY.md), [CONTRIBUTING.md](CONTRIBUTING.md) e [docs/BRANCH_POLICY.md](docs/BRANCH_POLICY.md).

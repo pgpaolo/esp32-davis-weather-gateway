@@ -301,11 +301,9 @@ void queueLightningEventIfNeeded() {
   char ts[24]; timestampUtc(ts, sizeof(ts));
   char line[LINE_SIZE];
   snprintf(line, sizeof(line),
-           "%s,%lu,lightning,,,,,,,,,,,,,,,,,,,,,,,,%u,%lu,%lu,, ,",
+           "%s,%lu,lightning,,,,,,,,,,,,,,,,,,,,,,,,%u,%lu,%lu,,,",
            ts, static_cast<unsigned long>(millis()), static_cast<unsigned>(ls.lastDistanceKm),
            static_cast<unsigned long>(ls.lastEnergy), static_cast<unsigned long>(ls.lightningTotal));
-  // Keep the last three CSV fields empty: battery_low, raw, normalized.
-  for (char *p = line; *p; ++p) if (*p == ' ' && p > line && p[-1] == ',' && p[1] == ',') *p = ',';
   queueLine(line);
 }
 

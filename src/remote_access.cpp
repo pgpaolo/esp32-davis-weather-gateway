@@ -16,7 +16,6 @@
 #include <time.h>
 #include <vector>
 
-#include "board_config.h"
 #include "config.h"
 #include "network_manager.h"
 #include "remote_trust.h"
@@ -24,589 +23,72 @@
 #include "web_manager.h"
 
 namespace {
-constexpr const char *NVS_NS = "remote";
-constexpr const char *NVS_URL = "url";
-constexpr const char *NVS_TOKEN = "token";
-constexpr time_t VALID_TLS_EPOCH = 1700000000;
-constexpr uint32_t PENDING_RETRY_MS = 30000UL;
-constexpr uint32_t ERROR_RETRY_MS = 15000UL;
-constexpr uint32_t APPROVED_REFRESH_MS = 60000UL;
-constexpr uint32_t WS_RECONNECT_MS = 5000UL;
-constexpr uint32_t LOCAL_HTTP_TIMEOUT_MS = 6000UL;
-constexpr size_t MAX_REQUEST_BODY = 12288U;
-constexpr size_t MAX_RESPONSE_BODY = 24576U;
-constexpr size_t MAX_WS_MESSAGE = 38000U;
+constexpr const char *NVS_NS="remote", *NVS_URL="url", *NVS_TOKEN="token";
+constexpr time_t TLS_EPOCH=1700000000;
+constexpr uint32_t RETRY_PENDING=30000UL, RETRY_ERROR=15000UL, RETRY_APPROVED=60000UL;
+constexpr size_t MAX_REQ=12288U, MAX_RESP=24576U, MAX_WS=38000U;
 
-struct UrlParts {
-  String host;
-  String path;
-  uint16_t port = 0;
-};
-
-struct LocalHttpResponse {
-  int status = 502;
-  String contentType = "text/plain; charset=utf-8";
-  String contentEncoding;
-  String location;
-  String cacheControl;
-  String contentDisposition;
-  std::vector<uint8_t> body;
-};
+struct UrlParts{String host,path;uint16_t port=443;};
+struct LocalResp{int code=502;String type="text/plain; charset=utf-8",encoding,location,cache,disposition;std::vector<uint8_t> body;};
 
 RemoteAccessConfig cfg;
-RemoteAccessStatus status;
-String deviceToken;
-SemaphoreHandle_t stateMutex = nullptr;
-TaskHandle_t remoteTaskHandle = nullptr;
-volatile uint32_t configGeneration = 1;
-volatile bool forceRetry = false;
-
+RemoteAccessStatus st;
+String token;
+SemaphoreHandle_t mux=nullptr;
+TaskHandle_t taskHandle=nullptr;
 WebSocketsClient ws;
-String wsAuthHeader;
-String activeWsUrl;
-bool wsConfigured = false;
+String wsAuth,activeWsUrl;
+bool wsStarted=false;
+volatile uint32_t generation=1;
+volatile bool forceRetry=false;
 
-bool lockState(TickType_t wait = pdMS_TO_TICKS(250)) {
-  return stateMutex && xSemaphoreTake(stateMutex, wait) == pdTRUE;
-}
-void unlockState() { if (stateMutex) xSemaphoreGive(stateMutex); }
+bool take(){return mux&&xSemaphoreTake(mux,pdMS_TO_TICKS(250))==pdTRUE;}void give(){if(mux)xSemaphoreGive(mux);}
+String esc(const String&s){String o;o.reserve(s.length()+8);for(char c:s){if(c=='\\'||c=='"'){o+='\\';o+=c;}else if(c=='\n')o+="\\n";else if(c!='\r')o+=c;}return o;}
 
-String jsonEscape(const String &s) {
-  String o; o.reserve(s.length() + 8);
-  for (size_t i = 0; i < s.length(); ++i) {
-    const char c = s[i];
-    if (c == '\\' || c == '"') { o += '\\'; o += c; }
-    else if (c == '\n') o += "\\n";
-    else if (c == '\t') o += "\\t";
-    else if (c != '\r') o += c;
-  }
-  return o;
-}
+String makeId(){uint8_t m[6]={0};if(esp_read_mac(m,ESP_MAC_WIFI_STA)!=ESP_OK){uint64_t e=ESP.getEfuseMac();for(uint8_t i=0;i<6;i++)m[5-i]=(e>>(8*i))&0xff;}char b[32];snprintf(b,sizeof(b),"esp32-%02x%02x%02x%02x%02x%02x",m[0],m[1],m[2],m[3],m[4],m[5]);return String(b);}
+bool validToken(const String&s){if(s.length()!=64)return false;for(char c:s)if(!isxdigit((unsigned char)c))return false;return true;}
+String newToken(){uint8_t r[32];esp_fill_random(r,sizeof(r));char b[65];for(size_t i=0;i<32;i++)snprintf(b+i*2,3,"%02x",r[i]);b[64]=0;return String(b);}
 
-String lowerCopy(String s) { s.toLowerCase(); return s; }
+bool parseUrl(const String&u,const char*scheme,UrlParts&o){String p=String(scheme)+"://";if(!u.startsWith(p))return false;String r=u.substring(p.length());if(r.isEmpty()||r.indexOf('@')>=0||r.indexOf('\r')>=0||r.indexOf('\n')>=0)return false;int slash=r.indexOf('/');String a=slash>=0?r.substring(0,slash):r;o.path=slash>=0?r.substring(slash):"/";int colon=a.lastIndexOf(':');if(colon>0){long port=a.substring(colon+1).toInt();if(port<1||port>65535)return false;o.port=(uint16_t)port;o.host=a.substring(0,colon);}else{o.port=443;o.host=a;}return !o.host.isEmpty()&&o.path.startsWith("/");}
+bool normalizePortal(String&u){u.trim();while(u.endsWith("/"))u.remove(u.length()-1);if(u.isEmpty())return true;if(u.length()>220||u.indexOf('?')>=0||u.indexOf('#')>=0)return false;UrlParts p;return parseUrl(u,"https",p);}
 
-bool validTokenHex(const String &s) {
-  if (s.length() != 64U) return false;
-  for (size_t i = 0; i < s.length(); ++i) {
-    const char c = s[i];
-    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
-  }
-  return true;
-}
+void setState(const String&name,const String&err=""){if(!take())return;st.state=name;st.lastError=err;st.configured=!cfg.portalUrl.isEmpty();st.deviceId=remoteDefaultDeviceId();give();}
+void load(){Preferences p;if(!p.begin(NVS_NS,false)){cfg={};token=newToken();return;}cfg.portalUrl=p.getString(NVS_URL,"");normalizePortal(cfg.portalUrl);token=p.getString(NVS_TOKEN,"");if(!validToken(token)){token=newToken();p.putString(NVS_TOKEN,token);}p.remove("device");p.remove("ca");p.remove("heartbeat");p.remove("admin");p.remove("enabled");p.end();}
 
-String generateTokenHex() {
-  uint8_t raw[32];
-  esp_fill_random(raw, sizeof(raw));
-  char out[65];
-  for (size_t i = 0; i < sizeof(raw); ++i) snprintf(out + (i * 2U), 3U, "%02x", raw[i]);
-  out[64] = '\0';
-  return String(out);
+String b64enc(const uint8_t*d,size_t n){if(!d||!n)return String();size_t cap=4*((n+2)/3)+1,w=0;std::vector<unsigned char>b(cap);if(mbedtls_base64_encode(b.data(),b.size(),&w,d,n)!=0)return String();String s;s.reserve(w+1);s.concat((const char*)b.data(),w);return s;}
+bool b64dec(const String&s,std::vector<uint8_t>&out){out.clear();if(s.isEmpty())return true;size_t cap=s.length()*3/4+4,w=0;if(cap>MAX_REQ+4)return false;out.resize(cap);if(mbedtls_base64_decode(out.data(),out.size(),&w,(const unsigned char*)s.c_str(),s.length())!=0||w>MAX_REQ){out.clear();return false;}out.resize(w);return true;}
+
+String hdr(const JsonObjectConst&h,const char*wanted){if(h.isNull())return String();String target=wanted;target.toLowerCase();for(JsonPairConst kv:h){String k=kv.key().c_str();k.toLowerCase();if(k==target){String v=kv.value().as<String>();v.replace("\r","");v.replace("\n","");if(v.length()>256)v.remove(256);return v;}}return String();}
+bool safePath(const String&p){return !p.isEmpty()&&p.length()<768&&p[0]=='/'&&p.indexOf("\r")<0&&p.indexOf("\n")<0&&p.indexOf("://")<0;}
+
+bool localHttp(String method,const String&path,const JsonObjectConst&headers,const std::vector<uint8_t>&req,LocalResp&r,String&err){
+  if(!webStarted()){err="Web UI locale non pronta";return false;}method.toUpperCase();if(!safePath(path)){err="Path non valido";return false;}if(method!="GET"&&method!="POST"&&method!="HEAD"){r.code=405;const char*m="Method not allowed";r.body.assign(m,m+strlen(m));return true;}
+  WiFiClient c;c.setTimeout(6000);IPAddress ip=WiFi.localIP();if(!c.connect(ip,80)){c.stop();if(!c.connect(IPAddress(127,0,0,1),80)){err="Connessione Web UI locale fallita";return false;}}
+  c.print(method);c.print(' ');c.print(path);c.print(F(" HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n"));String ct=hdr(headers,"content-type"),ac=hdr(headers,"accept");if(!ct.isEmpty()){c.print(F("Content-Type: "));c.print(ct);c.print(F("\r\n"));}if(!ac.isEmpty()){c.print(F("Accept: "));c.print(ac);c.print(F("\r\n"));}if(!req.empty()){c.print(F("Content-Length: "));c.print(req.size());c.print(F("\r\n"));}c.print(F("\r\n"));if(!req.empty())c.write(req.data(),req.size());
+  uint32_t start=millis();while(!c.available()&&c.connected()&&millis()-start<6000)vTaskDelay(pdMS_TO_TICKS(2));if(!c.available()){c.stop();err="Timeout Web UI locale";return false;}
+  String sl=c.readStringUntil('\n');sl.trim();int a=sl.indexOf(' '),b=sl.indexOf(' ',a+1);if(a<0){c.stop();err="Risposta locale non valida";return false;}r.code=sl.substring(a+1,b>a?b:sl.length()).toInt();size_t len=0;bool haveLen=false;
+  while(c.connected()||c.available()){String l=c.readStringUntil('\n');if(l=="\r"||l.isEmpty())break;l.trim();int x=l.indexOf(':');if(x<1)continue;String k=l.substring(0,x),v=l.substring(x+1);k.toLowerCase();v.trim();if(k=="content-type")r.type=v;else if(k=="content-encoding")r.encoding=v;else if(k=="location")r.location=v;else if(k=="cache-control")r.cache=v;else if(k=="content-disposition")r.disposition=v;else if(k=="content-length"){len=v.toInt();haveLen=true;}}
+  if(haveLen&&len>MAX_RESP){c.stop();err="Risposta locale troppo grande";return false;}r.body.clear();r.body.reserve(haveLen?len:2048);start=millis();while((c.connected()||c.available())&&millis()-start<6000){while(c.available()){int ch=c.read();if(ch<0)break;if(r.body.size()>=MAX_RESP){c.stop();err="Risposta locale oltre limite";return false;}r.body.push_back((uint8_t)ch);if(haveLen&&r.body.size()>=len)break;}if(haveLen&&r.body.size()>=len)break;vTaskDelay(pdMS_TO_TICKS(1));}c.stop();if(haveLen&&r.body.size()<len){err="Risposta locale incompleta";return false;}return true;
 }
 
-String buildDeviceId() {
-  uint8_t mac[6] = {0};
-  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) {
-    const uint64_t efuse = ESP.getEfuseMac();
-    for (uint8_t i = 0; i < 6U; ++i) mac[5U - i] = static_cast<uint8_t>((efuse >> (i * 8U)) & 0xFFU);
-  }
-  char out[32];
-  snprintf(out, sizeof(out), "esp32-%02x%02x%02x%02x%02x%02x",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-  return String(out);
+void sendResp(const String&id,const LocalResp&r){String b=b64enc(r.body.data(),r.body.size());String o;o.reserve(b.length()+650);o="{\"type\":\"http_response\",\"id\":\""+esc(id)+"\",\"status\":"+String(r.code)+",\"headers\":{\"content-type\":\""+esc(r.type)+"\"";if(!r.encoding.isEmpty())o+=",\"content-encoding\":\""+esc(r.encoding)+"\"";if(!r.location.isEmpty())o+=",\"location\":\""+esc(r.location)+"\"";if(!r.cache.isEmpty())o+=",\"cache-control\":\""+esc(r.cache)+"\"";if(!r.disposition.isEmpty())o+=",\"content-disposition\":\""+esc(r.disposition)+"\"";o+="},\"body_b64\":\""+b+"\"}";if(o.length()<=MAX_WS&&ws.sendTXT(o)){if(take()){st.responses++;st.lastActivityMs=millis();give();}}}
+void sendErr(const String&id,int code,const String&msg){LocalResp r;r.code=code;r.body.assign(msg.c_str(),msg.c_str()+msg.length());sendResp(id,r);}
+
+void wsText(uint8_t*p,size_t n){if(!p||!n||n>MAX_WS)return;JsonDocument d;if(deserializeJson(d,p,n))return;String type=d["type"]|"",id=d["id"]|"";if(take()){st.lastActivityMs=millis();give();}if(type=="ping"){String x="{\"type\":\"pong\"";if(!id.isEmpty())x+=",\"id\":\""+esc(id)+"\"";x+="}";ws.sendTXT(x);return;}if(type!="http_request"||id.isEmpty())return;if(take()){st.requests++;give();}String method=d["method"]|"GET",path=d["path"]|"/",bb=d["body_b64"]|"";std::vector<uint8_t>body;if(!b64dec(bb,body)){sendErr(id,413,"Request body non valido");return;}LocalResp r;String e;if(!localHttp(method,path,d["headers"].as<JsonObjectConst>(),body,r,e)){sendErr(id,502,e);return;}sendResp(id,r);}
+
+void wsEvent(WStype_t t,uint8_t*p,size_t n){if(t==WStype_CONNECTED){if(take()){st.transportActive=true;st.approved=true;st.state="ONLINE";st.wsConnects++;st.lastActivityMs=millis();st.lastError="";give();}Serial.println(F("[REMOTE] AdminSensor ONLINE"));}else if(t==WStype_DISCONNECTED){if(take()){bool was=st.transportActive;st.transportActive=false;if(st.configured&&st.approved)st.state="RECONNECT";if(was)st.wsDisconnects++;give();}}else if(t==WStype_TEXT)wsText(p,n);else if(t==WStype_PING||t==WStype_PONG){if(take()){st.lastActivityMs=millis();give();}}}
+
+bool enroll(const String&portal,String&wsUrl,bool&pending){pending=false;wsUrl="";WiFiClientSecure c;c.setCACert(REMOTE_TRUST_CA);c.setTimeout(8000);HTTPClient h;h.setConnectTimeout(7000);h.setTimeout(8000);if(!h.begin(c,portal+"/api/device/enroll")){setState("ERROR","HTTPS enroll init fallita");return false;}h.addHeader("Content-Type","application/json");JsonDocument q;q["device_id"]=remoteDefaultDeviceId();q["device_token"]=token;q["name"]=runtimeConfig.hostname.isEmpty()?"Stazione meteo":runtimeConfig.hostname;q["model"]="ESP32 Davis Weather Gateway";q["firmware_version"]=FIRMWARE_VERSION;String body;serializeJson(q,body);if(take()){st.enrollAttempts++;give();}int code=h.POST(body);String resp=code>0?h.getString():String();h.end();if(take()){st.lastEnrollHttpCode=code;st.lastActivityMs=millis();give();}if(code<200||code>=300){setState("ERROR",code>0?String("Enroll HTTP ")+code:"Errore TLS/HTTP enroll");return false;}JsonDocument d;if(deserializeJson(d,resp)){setState("ERROR","Risposta enroll JSON non valida");return false;}String s=d["status"]|"";if(s=="pending"){pending=true;if(take()){st.approved=false;st.transportActive=false;give();}setState("PENDING");return true;}if(s!="approved"){if(take()){st.approved=false;st.transportActive=false;give();}setState("DENIED",s.isEmpty()?"Stato enroll mancante":String("Stato portale: ")+s);return false;}wsUrl=d["websocket_url"]|"";UrlParts u;if(!parseUrl(wsUrl,"wss",u)){setState("ERROR","websocket_url WSS non valido");return false;}if(take()){st.approved=true;st.lastError="";give();}setState("APPROVED");return true;}
+
+bool startWs(const String&url){UrlParts u;if(!parseUrl(url,"wss",u))return false;ws.disconnect();ws.beginSslWithCA(u.host.c_str(),u.port,u.path.c_str(),REMOTE_TRUST_CA,"");wsAuth="Authorization: Bearer "+token;ws.setExtraHeaders(wsAuth.c_str());ws.setReconnectInterval(5000);ws.enableHeartbeat(30000,5000,2);activeWsUrl=url;wsStarted=true;setState("CONNECTING");return true;}
+
+void task(void*){uint32_t seen=0,next=0;for(;;){RemoteAccessConfig c;if(take()){c=cfg;give();}uint32_t g=generation;bool fr=forceRetry;if(fr)forceRetry=false;if(g!=seen||fr){seen=g;if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;if(take()){st.transportActive=false;st.approved=false;give();}}if(c.portalUrl.isEmpty()){setState("OFF");vTaskDelay(pdMS_TO_TICKS(300));continue;}if(!networkConnected()||networkProvisioningActive()){if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}if(time(nullptr)<TLS_EPOCH){setState("WAIT_TIME");vTaskDelay(pdMS_TO_TICKS(500));continue;}uint32_t now=millis();bool online=false;if(take()){online=st.transportActive;give();}if(next==0||(!online&&(int32_t)(now-next)>=0)){bool pending=false;String u;setState("ENROLLING");bool ok=enroll(c.portalUrl,u,pending);if(ok&&pending){if(wsStarted){ws.disconnect();wsStarted=false;}next=millis()+RETRY_PENDING;}else if(ok&&!u.isEmpty()){if(!wsStarted||u!=activeWsUrl)startWs(u);next=millis()+RETRY_APPROVED;}else next=millis()+RETRY_ERROR;}if(wsStarted)ws.loop();vTaskDelay(pdMS_TO_TICKS(8));}}
 }
 
-bool parseSecureUrl(const String &input, const char *scheme, UrlParts &out) {
-  const String prefix = String(scheme) + "://";
-  if (!input.startsWith(prefix)) return false;
-  String rest = input.substring(prefix.length());
-  if (rest.isEmpty() || rest.indexOf('@') >= 0 || rest.indexOf('\r') >= 0 || rest.indexOf('\n') >= 0) return false;
-  const int slash = rest.indexOf('/');
-  String authority = slash >= 0 ? rest.substring(0, slash) : rest;
-  out.path = slash >= 0 ? rest.substring(slash) : "/";
-  if (authority.isEmpty() || authority.indexOf('[') >= 0 || authority.indexOf(']') >= 0) return false;
-  const int colon = authority.lastIndexOf(':');
-  out.port = (strcmp(scheme, "https") == 0 || strcmp(scheme, "wss") == 0) ? 443U : 0U;
-  if (colon > 0) {
-    const long p = authority.substring(colon + 1).toInt();
-    if (p <= 0 || p > 65535) return false;
-    out.port = static_cast<uint16_t>(p);
-    out.host = authority.substring(0, colon);
-  } else out.host = authority;
-  return !out.host.isEmpty() && out.path.startsWith("/");
-}
-
-bool normalizePortalUrl(String &url) {
-  url.trim();
-  while (url.endsWith("/")) url.remove(url.length() - 1U);
-  if (url.isEmpty()) return true;
-  if (url.length() > 220U || url.indexOf('?') >= 0 || url.indexOf('#') >= 0) return false;
-  UrlParts parts;
-  return parseSecureUrl(url, "https", parts);
-}
-
-bool tlsClockReady() { return time(nullptr) >= VALID_TLS_EPOCH; }
-
-void setState(const String &name, const String &error = String()) {
-  if (!lockState()) return;
-  status.state = name;
-  status.lastError = error;
-  status.configured = !cfg.portalUrl.isEmpty();
-  status.deviceId = remoteDefaultDeviceId();
-  unlockState();
-}
-
-void noteActivity() {
-  if (!lockState()) return;
-  status.lastActivityMs = millis();
-  unlockState();
-}
-
-void loadIdentityAndConfig() {
-  cfg = RemoteAccessConfig{};
-  Preferences p;
-  if (!p.begin(NVS_NS, false)) {
-    deviceToken = generateTokenHex();
-    return;
-  }
-  cfg.portalUrl = p.getString(NVS_URL, "");
-  normalizePortalUrl(cfg.portalUrl);
-  deviceToken = p.getString(NVS_TOKEN, "");
-  if (!validTokenHex(deviceToken)) {
-    deviceToken = generateTokenHex();
-    p.putString(NVS_TOKEN, deviceToken);
-  }
-  // Remove obsolete 0.4.0-dev manual-credential fields. The stable token is
-  // deliberately retained; installers no longer edit device identity or CA.
-  p.remove("device"); p.remove("ca"); p.remove("heartbeat");
-  p.remove("admin"); p.remove("enabled");
-  p.end();
-}
-
-bool decodeBase64(const String &in, std::vector<uint8_t> &out) {
-  out.clear();
-  if (in.isEmpty()) return true;
-  const size_t capacity = (in.length() * 3U) / 4U + 4U;
-  if (capacity > MAX_REQUEST_BODY + 4U) return false;
-  out.resize(capacity);
-  size_t written = 0;
-  const int rc = mbedtls_base64_decode(out.data(), out.size(), &written,
-                                       reinterpret_cast<const unsigned char *>(in.c_str()), in.length());
-  if (rc != 0 || written > MAX_REQUEST_BODY) { out.clear(); return false; }
-  out.resize(written);
-  return true;
-}
-
-String encodeBase64(const uint8_t *data, size_t len) {
-  if (!data || !len) return String();
-  const size_t cap = 4U * ((len + 2U) / 3U) + 1U;
-  std::vector<unsigned char> encoded(cap);
-  size_t written = 0;
-  if (mbedtls_base64_encode(encoded.data(), encoded.size(), &written, data, len) != 0) return String();
-  String out;
-  if (!out.reserve(written + 1U)) return String();
-  out.concat(reinterpret_cast<const char *>(encoded.data()), written);
-  return out;
-}
-
-bool safeLocalPath(const String &path) {
-  return !path.isEmpty() && path.length() <= 768U && path[0] == '/' &&
-         path.indexOf("//") != 0 && path.indexOf("\r") < 0 && path.indexOf("\n") < 0 &&
-         path.indexOf("://") < 0;
-}
-
-String incomingHeader(const JsonObjectConst &headers, const char *wanted) {
-  if (headers.isNull()) return String();
-  const String target = lowerCopy(String(wanted));
-  for (JsonPairConst kv : headers) {
-    String key = kv.key().c_str(); key.toLowerCase();
-    if (key == target) {
-      String value = kv.value().as<String>();
-      value.replace("\r", ""); value.replace("\n", "");
-      if (value.length() > 256U) value.remove(256U);
-      return value;
-    }
-  }
-  return String();
-}
-
-bool connectLocal(WiFiClient &client) {
-  client.setTimeout(LOCAL_HTTP_TIMEOUT_MS / 1000U);
-  IPAddress local = WiFi.localIP();
-  if (local != IPAddress(0, 0, 0, 0) && client.connect(local, 80)) return true;
-  client.stop();
-  return client.connect(IPAddress(127, 0, 0, 1), 80);
-}
-
-bool proxyLocalHttp(const String &method, const String &path, const JsonObjectConst &headers,
-                    const std::vector<uint8_t> &requestBody, LocalHttpResponse &response, String &error) {
-  if (!webStarted()) { error = "Web UI locale non ancora pronta"; return false; }
-  if (!safeLocalPath(path)) { error = "Path remoto non valido"; return false; }
-  if (!(method == "GET" || method == "POST" || method == "HEAD")) {
-    response.status = 405;
-    const char msg[] = "Method not allowed";
-    response.body.assign(msg, msg + sizeof(msg) - 1U);
-    return true;
-  }
-
-  WiFiClient client;
-  if (!connectLocal(client)) { error = "Connessione alla Web UI locale fallita"; return false; }
-
-  client.print(method); client.print(' '); client.print(path); client.print(F(" HTTP/1.0\r\n"));
-  client.print(F("Host: 127.0.0.1\r\nConnection: close\r\n"));
-  const String contentType = incomingHeader(headers, "content-type");
-  const String accept = incomingHeader(headers, "accept");
-  if (!contentType.isEmpty()) { client.print(F("Content-Type: ")); client.print(contentType); client.print(F("\r\n")); }
-  if (!accept.isEmpty()) { client.print(F("Accept: ")); client.print(accept); client.print(F("\r\n")); }
-  if (!requestBody.empty()) { client.print(F("Content-Length: ")); client.print(requestBody.size()); client.print(F("\r\n")); }
-  client.print(F("\r\n"));
-  if (!requestBody.empty()) client.write(requestBody.data(), requestBody.size());
-
-  const uint32_t waitStart = millis();
-  while (!client.available() && client.connected() && static_cast<uint32_t>(millis() - waitStart) < LOCAL_HTTP_TIMEOUT_MS) vTaskDelay(pdMS_TO_TICKS(2));
-  if (!client.available()) { client.stop(); error = "Timeout Web UI locale"; return false; }
-
-  String statusLine = client.readStringUntil('\n'); statusLine.trim();
-  if (!statusLine.startsWith("HTTP/")) { client.stop(); error = "Risposta HTTP locale non valida"; return false; }
-  const int firstSpace = statusLine.indexOf(' ');
-  const int secondSpace = statusLine.indexOf(' ', firstSpace + 1);
-  response.status = firstSpace > 0 ? statusLine.substring(firstSpace + 1, secondSpace > firstSpace ? secondSpace : statusLine.length()).toInt() : 502;
-
-  size_t contentLength = 0;
-  bool haveLength = false;
-  while (client.connected() || client.available()) {
-    String line = client.readStringUntil('\n');
-    if (line == "\r" || line.length() == 0U) break;
-    line.trim();
-    const int colon = line.indexOf(':');
-    if (colon <= 0) continue;
-    String key = line.substring(0, colon); key.toLowerCase();
-    String value = line.substring(colon + 1); value.trim();
-    if (key == "content-type") response.contentType = value;
-    else if (key == "content-encoding") response.contentEncoding = value;
-    else if (key == "location") response.location = value;
-    else if (key == "cache-control") response.cacheControl = value;
-    else if (key == "content-disposition") response.contentDisposition = value;
-    else if (key == "content-length") { contentLength = static_cast<size_t>(value.toInt()); haveLength = true; }
-  }
-
-  if (haveLength && contentLength > MAX_RESPONSE_BODY) {
-    client.stop(); error = "Risposta locale troppo grande"; return false;
-  }
-  response.body.clear();
-  response.body.reserve(haveLength ? contentLength : 2048U);
-  const uint32_t bodyStart = millis();
-  while ((client.connected() || client.available()) && static_cast<uint32_t>(millis() - bodyStart) < LOCAL_HTTP_TIMEOUT_MS) {
-    while (client.available()) {
-      const int c = client.read();
-      if (c < 0) break;
-      if (response.body.size() >= MAX_RESPONSE_BODY) { client.stop(); error = "Risposta locale oltre limite"; return false; }
-      response.body.push_back(static_cast<uint8_t>(c));
-      if (haveLength && response.body.size() >= contentLength) break;
-    }
-    if (haveLength && response.body.size() >= contentLength) break;
-    vTaskDelay(pdMS_TO_TICKS(1));
-  }
-  client.stop();
-  if (haveLength && response.body.size() < contentLength) { error = "Risposta locale incompleta"; return false; }
-  return true;
-}
-
-void sendHttpResponse(const String &id, const LocalHttpResponse &response) {
-  const String b64 = encodeBase64(response.body.data(), response.body.size());
-  String out;
-  const size_t estimate = b64.length() + 700U;
-  if (estimate > MAX_WS_MESSAGE || !out.reserve(estimate)) return;
-  out = "{\"type\":\"http_response\",\"id\":\"" + jsonEscape(id) + "\",\"status\":" + String(response.status) + ",\"headers\":{";
-  out += "\"content-type\":\"" + jsonEscape(response.contentType) + "\"";
-  if (!response.contentEncoding.isEmpty()) out += ",\"content-encoding\":\"" + jsonEscape(response.contentEncoding) + "\"";
-  if (!response.location.isEmpty()) out += ",\"location\":\"" + jsonEscape(response.location) + "\"";
-  if (!response.cacheControl.isEmpty()) out += ",\"cache-control\":\"" + jsonEscape(response.cacheControl) + "\"";
-  if (!response.contentDisposition.isEmpty()) out += ",\"content-disposition\":\"" + jsonEscape(response.contentDisposition) + "\"";
-  out += "},\"body_b64\":\""; out += b64; out += "\"}";
-  if (out.length() <= MAX_WS_MESSAGE && ws.sendTXT(out)) {
-    if (lockState()) { status.responses++; status.lastActivityMs = millis(); unlockState(); }
-  }
-}
-
-void sendErrorResponse(const String &id, int httpStatus, const String &message) {
-  LocalHttpResponse r; r.status = httpStatus;
-  r.body.assign(message.c_str(), message.c_str() + message.length());
-  sendHttpResponse(id, r);
-}
-
-void handleWsText(uint8_t *payload, size_t length) {
-  if (!payload || !length || length > MAX_WS_MESSAGE) return;
-  JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, payload, length);
-  if (err) return;
-  const String type = doc["type"] | "";
-  const String id = doc["id"] | "";
-  noteActivity();
-
-  if (type == "ping") {
-    String pong = "{\"type\":\"pong\"";
-    if (!id.isEmpty()) pong += ",\"id\":\"" + jsonEscape(id) + "\"";
-    pong += "}"; ws.sendTXT(pong); return;
-  }
-  if (type != "http_request" || id.isEmpty()) return;
-
-  if (lockState()) { status.requests++; unlockState(); }
-  String method = doc["method"] | "GET"; method.toUpperCase();
-  const String path = doc["path"] | "/";
-  const String bodyB64 = doc["body_b64"] | "";
-  std::vector<uint8_t> body;
-  if (!decodeBase64(bodyB64, body)) { sendErrorResponse(id, 413, "Request body non valido o troppo grande"); return; }
-  const JsonObjectConst headers = doc["headers"].as<JsonObjectConst>();
-  LocalHttpResponse response; String proxyError;
-  if (!proxyLocalHttp(method, path, headers, body, response, proxyError)) {
-    sendErrorResponse(id, 502, proxyError); return;
-  }
-  sendHttpResponse(id, response);
-}
-
-void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
-  switch (type) {
-    case WStype_CONNECTED:
-      if (lockState()) {
-        status.transportActive = true; status.approved = true; status.state = "ONLINE";
-        status.wsConnects++; status.lastActivityMs = millis(); status.lastError = ""; unlockState();
-      }
-      Serial.println(F("[REMOTE] AdminSensor tunnel ONLINE"));
-      break;
-    case WStype_DISCONNECTED:
-      if (lockState()) {
-        const bool wasActive = status.transportActive;
-        status.transportActive = false;
-        if (status.configured && status.approved) status.state = "RECONNECT";
-        if (wasActive) status.wsDisconnects++;
-        unlockState();
-      }
-      break;
-    case WStype_TEXT: handleWsText(payload, length); break;
-    case WStype_PING:
-    case WStype_PONG: noteActivity(); break;
-    default: break;
-  }
-}
-
-bool enrollDevice(const String &portalUrl, String &wsUrl, bool &pending) {
-  pending = false; wsUrl = "";
-  String enrollUrl = portalUrl + "/api/device/enroll";
-  WiFiClientSecure client;
-  client.setCACert(REMOTE_TRUST_CA);
-  client.setTimeout(8);
-  HTTPClient http;
-  http.setConnectTimeout(7000);
-  http.setTimeout(8000);
-  if (!http.begin(client, enrollUrl)) { setState("ERROR", "Impossibile inizializzare HTTPS enroll"); return false; }
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("Accept", "application/json");
-
-  JsonDocument req;
-  req["device_id"] = remoteDefaultDeviceId();
-  req["device_token"] = deviceToken;
-  req["name"] = runtimeConfig.hostname.isEmpty() ? "Stazione meteo" : runtimeConfig.hostname;
-  req["model"] = "ESP32 Davis Weather Gateway";
-  req["firmware_version"] = FIRMWARE_VERSION;
-  String body; serializeJson(req, body);
-
-  if (lockState()) { status.enrollAttempts++; unlockState(); }
-  const int code = http.POST(reinterpret_cast<const uint8_t *>(body.c_str()), body.length());
-  const String response = code > 0 ? http.getString() : String();
-  http.end();
-  if (lockState()) { status.lastEnrollHttpCode = code; status.lastActivityMs = millis(); unlockState(); }
-  if (code < 200 || code >= 300) {
-    setState("ERROR", code > 0 ? String("Enroll HTTP ") + code : String("Errore TLS/HTTP enroll"));
-    return false;
-  }
-
-  JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, response);
-  if (err) { setState("ERROR", "Risposta enroll JSON non valida"); return false; }
-  const String s = doc["status"] | "";
-  if (s == "pending") {
-    pending = true;
-    if (lockState()) { status.approved = false; status.transportActive = false; unlockState(); }
-    setState("PENDING");
-    return true;
-  }
-  if (s != "approved") {
-    if (lockState()) { status.approved = false; status.transportActive = false; unlockState(); }
-    setState("DENIED", s.isEmpty() ? "Stato enroll mancante" : String("Stato portale: ") + s);
-    return false;
-  }
-
-  wsUrl = doc["websocket_url"] | "";
-  UrlParts wsParts;
-  if (!parseSecureUrl(wsUrl, "wss", wsParts)) { setState("ERROR", "websocket_url WSS non valido"); return false; }
-  if (lockState()) { status.approved = true; status.lastError = ""; unlockState(); }
-  setState("APPROVED");
-  return true;
-}
-
-bool configureWebSocket(const String &wsUrl) {
-  UrlParts p;
-  if (!parseSecureUrl(wsUrl, "wss", p)) return false;
-  ws.disconnect();
-  ws.beginSslWithCA(p.host.c_str(), p.port, p.path.c_str(), REMOTE_TRUST_CA, "");
-  wsAuthHeader = "Authorization: Bearer " + deviceToken;
-  ws.setExtraHeaders(wsAuthHeader.c_str());
-  ws.setReconnectInterval(WS_RECONNECT_MS);
-  ws.enableHeartbeat(30000UL, 5000UL, 2U);
-  activeWsUrl = wsUrl;
-  wsConfigured = true;
-  setState("CONNECTING");
-  return true;
-}
-
-void remoteTask(void *) {
-  uint32_t seenGeneration = 0;
-  uint32_t nextEnrollMs = 0;
-  String approvedWsUrl;
-  for (;;) {
-    RemoteAccessConfig localCfg;
-    if (lockState()) { localCfg = cfg; unlockState(); }
-    const uint32_t generation = configGeneration;
-    const bool retryNow = forceRetry;
-    if (retryNow) forceRetry = false;
-
-    if (generation != seenGeneration || retryNow) {
-      seenGeneration = generation;
-      if (wsConfigured) ws.disconnect();
-      wsConfigured = false; activeWsUrl = ""; approvedWsUrl = ""; nextEnrollMs = 0;
-      if (lockState()) { status.transportActive = false; status.approved = false; unlockState(); }
-    }
-
-    if (localCfg.portalUrl.isEmpty()) {
-      if (wsConfigured) { ws.disconnect(); wsConfigured = false; }
-      setState("OFF");
-      vTaskDelay(pdMS_TO_TICKS(300));
-      continue;
-    }
-    if (!networkConnected() || networkProvisioningActive()) {
-      if (wsConfigured) { ws.disconnect(); wsConfigured = false; }
-      setState("WAIT_NETWORK");
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
-    }
-    if (!tlsClockReady()) {
-      setState("WAIT_TIME");
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
-    }
-
-    const uint32_t now = millis();
-    bool transport = false;
-    if (lockState()) { transport = status.transportActive; unlockState(); }
-    if (nextEnrollMs == 0 || (!transport && static_cast<int32_t>(now - nextEnrollMs) >= 0)) {
-      bool pending = false; String newWs;
-      setState("ENROLLING");
-      const bool ok = enrollDevice(localCfg.portalUrl, newWs, pending);
-      if (ok && pending) {
-        if (wsConfigured) { ws.disconnect(); wsConfigured = false; }
-        approvedWsUrl = "";
-        nextEnrollMs = millis() + PENDING_RETRY_MS;
-      } else if (ok && !newWs.isEmpty()) {
-        approvedWsUrl = newWs;
-        if (!wsConfigured || activeWsUrl != approvedWsUrl) configureWebSocket(approvedWsUrl);
-        nextEnrollMs = millis() + APPROVED_REFRESH_MS;
-      } else nextEnrollMs = millis() + ERROR_RETRY_MS;
-    }
-
-    if (wsConfigured) ws.loop();
-    vTaskDelay(pdMS_TO_TICKS(8));
-  }
-}
-} // namespace
-
-String remoteDefaultDeviceId() {
-  static String id = buildDeviceId();
-  return id;
-}
-
-void initRemoteAccess() {
-  if (!stateMutex) stateMutex = xSemaphoreCreateMutex();
-  loadIdentityAndConfig();
-  if (lockState()) {
-    status = RemoteAccessStatus{};
-    status.initialized = true;
-    status.configured = !cfg.portalUrl.isEmpty();
-    status.deviceId = remoteDefaultDeviceId();
-    status.state = cfg.portalUrl.isEmpty() ? "OFF" : "WAIT_NETWORK";
-    unlockState();
-  }
-  ws.onEvent(onWebSocketEvent);
-  if (!remoteTaskHandle) {
-    if (xTaskCreate(remoteTask, "adminsensor", 12288, nullptr, 1, &remoteTaskHandle) != pdPASS) {
-      remoteTaskHandle = nullptr;
-      setState("ERROR", "Impossibile avviare task remoto");
-    }
-  }
-  Serial.print(F("[REMOTE] Device ID: ")); Serial.println(remoteDefaultDeviceId());
-  Serial.println(F("[REMOTE] Token dispositivo presente in NVS (valore non mostrato)"));
-}
-
-RemoteAccessConfig getRemoteAccessConfig() {
-  RemoteAccessConfig out;
-  if (lockState()) { out = cfg; unlockState(); }
-  return out;
-}
-
-RemoteAccessStatus getRemoteAccessStatus() {
-  RemoteAccessStatus out;
-  if (lockState()) { out = status; unlockState(); }
-  return out;
-}
-
-bool saveRemoteAccessPortalUrl(const String &portalUrl) {
-  String normalized = portalUrl;
-  if (!normalizePortalUrl(normalized)) return false;
-  Preferences p;
-  if (!p.begin(NVS_NS, false)) return false;
-  const bool ok = p.putString(NVS_URL, normalized) == normalized.length();
-  p.end();
-  if (!ok && !normalized.isEmpty()) return false;
-  if (lockState()) {
-    cfg.portalUrl = normalized;
-    status.configured = !normalized.isEmpty();
-    status.approved = false; status.transportActive = false;
-    status.state = normalized.isEmpty() ? "OFF" : "WAIT_NETWORK";
-    status.lastError = "";
-    unlockState();
-  }
-  configGeneration++;
-  return true;
-}
-
-bool resetRemoteAccessConfig() {
-  // Preserve NVS_TOKEN: a portal disable/re-enable must not create a new sensor
-  // identity. A true factory erase is the operation that rotates this secret.
-  return saveRemoteAccessPortalUrl("");
-}
-
-void retryRemoteAccessNow() { forceRetry = true; }
-
-String remoteAccessConfigJson() {
-  const RemoteAccessConfig c = getRemoteAccessConfig();
-  String j; j.reserve(360);
-  j = "{\"portal_url\":\"" + jsonEscape(c.portalUrl) + "\",\"device_id\":\"" + jsonEscape(remoteDefaultDeviceId()) + "\",\"has_token\":";
-  j += validTokenHex(deviceToken) ? "true" : "false";
-  j += ",\"identity_managed_by_firmware\":true}";
-  return j;
-}
-
-String remoteAccessStatusJson() {
-  const RemoteAccessStatus s = getRemoteAccessStatus();
-  String j; j.reserve(700);
-  j = "{\"initialized\":"; j += s.initialized ? "true" : "false";
-  j += ",\"configured\":"; j += s.configured ? "true" : "false";
-  j += ",\"approved\":"; j += s.approved ? "true" : "false";
-  j += ",\"transport_active\":"; j += s.transportActive ? "true" : "false";
-  j += ",\"state\":\"" + jsonEscape(s.state) + "\",\"device_id\":\"" + jsonEscape(s.deviceId) + "\"";
-  j += ",\"enroll_attempts\":" + String(s.enrollAttempts) + ",\"last_enroll_http_code\":" + String(s.lastEnrollHttpCode);
-  j += ",\"ws_connects\":" + String(s.wsConnects) + ",\"ws_disconnects\":" + String(s.wsDisconnects);
-  j += ",\"requests\":" + String(s.requests) + ",\"responses\":" + String(s.responses);
-  j += ",\"last_activity_age_ms\":" + (s.lastActivityMs ? String(static_cast<uint32_t>(millis() - s.lastActivityMs)) : String("null"));
-  j += ",\"last_error\":\"" + jsonEscape(s.lastError) + "\"}";
-  return j;
-}
+String remoteDefaultDeviceId(){static String id=makeId();return id;}
+void initRemoteAccess(){if(!mux)mux=xSemaphoreCreateMutex();load();if(take()){st=RemoteAccessStatus{};st.initialized=true;st.configured=!cfg.portalUrl.isEmpty();st.deviceId=remoteDefaultDeviceId();st.state=cfg.portalUrl.isEmpty()?"OFF":"WAIT_NETWORK";give();}ws.onEvent(wsEvent);if(!taskHandle&&xTaskCreate(task,"adminsensor",12288,nullptr,1,&taskHandle)!=pdPASS){taskHandle=nullptr;setState("ERROR","Task remoto non avviato");}Serial.print(F("[REMOTE] Device ID: "));Serial.println(remoteDefaultDeviceId());Serial.println(F("[REMOTE] Token in NVS (non mostrato)"));}
+RemoteAccessConfig getRemoteAccessConfig(){RemoteAccessConfig o;if(take()){o=cfg;give();}return o;}RemoteAccessStatus getRemoteAccessStatus(){RemoteAccessStatus o;if(take()){o=st;give();}return o;}
+bool saveRemoteAccessPortalUrl(const String&in){String u=in;if(!normalizePortal(u))return false;Preferences p;if(!p.begin(NVS_NS,false))return false;p.putString(NVS_URL,u);p.end();if(take()){cfg.portalUrl=u;st.configured=!u.isEmpty();st.approved=false;st.transportActive=false;st.state=u.isEmpty()?"OFF":"WAIT_NETWORK";st.lastError="";give();}generation++;return true;}
+bool resetRemoteAccessConfig(){return saveRemoteAccessPortalUrl("");}void retryRemoteAccessNow(){forceRetry=true;}
+String remoteAccessConfigJson(){RemoteAccessConfig c=getRemoteAccessConfig();String j="{\"portal_url\":\""+esc(c.portalUrl)+"\",\"device_id\":\""+esc(remoteDefaultDeviceId())+"\",\"has_token\":";j+=validToken(token)?"true":"false";j+=",\"identity_managed_by_firmware\":true}";return j;}
+String remoteAccessStatusJson(){RemoteAccessStatus s=getRemoteAccessStatus();String j="{\"initialized\":";j+=s.initialized?"true":"false";j+=",\"configured\":";j+=s.configured?"true":"false";j+=",\"approved\":";j+=s.approved?"true":"false";j+=",\"transport_active\":";j+=s.transportActive?"true":"false";j+=",\"state\":\""+esc(s.state)+"\",\"device_id\":\""+esc(s.deviceId)+"\",\"enroll_attempts\":"+String(s.enrollAttempts)+",\"last_enroll_http_code\":"+String(s.lastEnrollHttpCode)+",\"ws_connects\":"+String(s.wsConnects)+",\"ws_disconnects\":"+String(s.wsDisconnects)+",\"requests\":"+String(s.requests)+",\"responses\":"+String(s.responses)+",\"last_activity_age_ms\":"+(s.lastActivityMs?String((uint32_t)(millis()-s.lastActivityMs)):String("null"))+",\"last_error\":\""+esc(s.lastError)+"\"}";return j;}

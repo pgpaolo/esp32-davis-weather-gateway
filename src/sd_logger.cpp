@@ -388,6 +388,67 @@ bool resetSdLoggerConfig(bool &changed) { return saveSdLoggerConfig(SdLoggerConf
 bool remountSdLogger() { const bool ok = mountCard(false); if (!ok) scheduleRetry(); return ok; }
 bool formatSdLogger() { const bool ok = mountCard(true); if (!ok) scheduleRetry(); return ok; }
 
+bool sdLoggerCurrentFilePreview(String &content, uint32_t &fileSize, bool &truncated) {
+  content = "";
+  fileSize = 0;
+  truncated = false;
+#if !SDCARD_SUPPORTED
+  return false;
+#else
+  if (!status.mounted || !status.currentFile[0]) return false;
+  File32 f = sd.open(status.currentFile, O_RDONLY);
+  if (!f || f.isDirectory()) { if (f) f.close(); return false; }
+
+  constexpr size_t MAX_PREVIEW = 12U * 1024U;
+  constexpr size_t READ_CHUNK = 256U;
+  char buf[READ_CHUNK];
+  fileSize = static_cast<uint32_t>(f.fileSize());
+
+  if (fileSize <= MAX_PREVIEW) {
+    content.reserve(fileSize + 1U);
+    while (content.length() < MAX_PREVIEW) {
+      const size_t room = MAX_PREVIEW - content.length();
+      const int n = f.read(buf, room < READ_CHUNK ? room : READ_CHUNK);
+      if (n <= 0) break;
+      content.concat(buf, static_cast<unsigned int>(n));
+    }
+    f.close();
+    return true;
+  }
+
+  truncated = true;
+  String header;
+  header.reserve(640U);
+  f.seekSet(0);
+  char ch = 0;
+  while (header.length() < 640U && f.read(&ch, 1U) == 1) {
+    if (ch == '\n') break;
+    if (ch != '\r') header += ch;
+  }
+
+  const String marker = "\n# ... anteprima troncata: ultime righe del file ...\n";
+  const size_t fixed = header.length() + marker.length();
+  const size_t tailBudget = MAX_PREVIEW > fixed ? MAX_PREVIEW - fixed : MAX_PREVIEW / 2U;
+  const uint32_t seekPos = fileSize > tailBudget ? fileSize - static_cast<uint32_t>(tailBudget) : 0U;
+  f.seekSet(seekPos);
+  if (seekPos > 0U) {
+    while (f.read(&ch, 1U) == 1) if (ch == '\n') break;
+  }
+
+  content.reserve(MAX_PREVIEW + 1U);
+  content = header;
+  content += marker;
+  while (content.length() < MAX_PREVIEW) {
+    const size_t room = MAX_PREVIEW - content.length();
+    const int n = f.read(buf, room < READ_CHUNK ? room : READ_CHUNK);
+    if (n <= 0) break;
+    content.concat(buf, static_cast<unsigned int>(n));
+  }
+  f.close();
+  return true;
+#endif
+}
+
 String sdLoggerConfigJson() {
   String j; j.reserve(220); j="{\"enabled\":"; j+=cfg.enabled?"true":"false";
   j+=",\"log_rf\":"; j+=cfg.logRfFrames?"true":"false";

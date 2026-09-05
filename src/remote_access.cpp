@@ -129,14 +129,36 @@ bool localHttp(String method,const String&path,const String&contentType,const St
 }
 
 void sendResp(const String&id,const LocalResp&r){
-  String b=b64enc(r.body.data(),r.body.size());String o;o.reserve(b.length()+650);
-  o="{\"type\":\"http_response\",\"id\":\""+esc(id)+"\",\"status\":"+String(r.code)+",\"headers\":{\"content-type\":\""+esc(r.type)+"\"";
-  if(!r.encoding.isEmpty())o+=",\"content-encoding\":\""+esc(r.encoding)+"\"";
-  if(!r.location.isEmpty())o+=",\"location\":\""+esc(r.location)+"\"";
-  if(!r.cache.isEmpty())o+=",\"cache-control\":\""+esc(r.cache)+"\"";
-  if(!r.disposition.isEmpty())o+=",\"content-disposition\":\""+esc(r.disposition)+"\"";
-  o+="},\"body_b64\":\""+b+"\"}";
-  if(o.length()>MAX_WS)return;
+  const String b=b64enc(r.body.data(),r.body.size());
+
+  // Serialize the headers with ArduinoJson instead of hand-building nested JSON.
+  // This also removes the StringSumHelper chain that could generate a malformed
+  // frame on some ESP32 Arduino builds when the response body is large.
+  JsonDocument hd;
+  hd["content-type"]=r.type;
+  if(!r.encoding.isEmpty())hd["content-encoding"]=r.encoding;
+  if(!r.location.isEmpty())hd["location"]=r.location;
+  if(!r.cache.isEmpty())hd["cache-control"]=r.cache;
+  if(!r.disposition.isEmpty())hd["content-disposition"]=r.disposition;
+  String headersJson;
+  serializeJson(hd,headersJson);
+
+  String o;
+  o.reserve(b.length()+headersJson.length()+180);
+  o += F("{\"type\":\"http_response\",\"id\":\"");
+  o += esc(id);
+  o += F("\",\"status\":");
+  o += String(r.code);
+  o += F(",\"headers\":");
+  o += headersJson;
+  o += F(",\"body_b64\":\"");
+  o += b;
+  o += F("\"}");
+
+  if(o.length()>MAX_WS){
+    if(take()){st.lastError="Risposta remota oltre limite WebSocket";give();}
+    return;
+  }
   if(ws.sendTXT(o)&&take()){st.responses++;st.lastActivityMs=millis();give();}
 }
 void sendErr(const String&id,int code,const String&msg){LocalResp r;r.code=code;r.body.assign(msg.c_str(),msg.c_str()+msg.length());sendResp(id,r);}

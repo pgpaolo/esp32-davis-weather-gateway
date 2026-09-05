@@ -79,6 +79,15 @@ void initWeb(StationState &station){
   server.on("/api/config",HTTP_GET,[]{server.send(200,"application/json",configJson());});
   server.on("/api/meteobridge",HTTP_GET,[]{server.send(200,"text/plain; charset=utf-8",buildMeteobridgeCompatibleRecord(*statePtr));});
   server.on("/api/sd",HTTP_GET,[]{server.send(200,"application/json","{\"config\":"+sdLoggerConfigJson()+",\"status\":"+sdLoggerStatusJson()+"}");});
+  server.on("/api/sd/current",HTTP_GET,[]{
+    String preview;uint32_t fileSize=0;bool truncated=false;
+    if(!sdLoggerCurrentFilePreview(preview,fileSize,truncated)){server.send(404,"text/plain; charset=utf-8","Nessun file microSD disponibile");return;}
+    const SdLoggerStatus s=getSdLoggerStatus();noCache();
+    server.sendHeader("X-SD-File",String(s.currentFile));
+    server.sendHeader("X-SD-Size",String(fileSize));
+    server.sendHeader("X-SD-Truncated",truncated?"1":"0");
+    server.send(200,"text/plain; charset=utf-8",preview);
+  });
   server.on("/api/remote/config",HTTP_GET,[]{server.send(200,"application/json",remoteAccessConfigJson());});
   server.on("/api/remote/status",HTTP_GET,[]{server.send(200,"application/json",remoteAccessStatusJson());});
 

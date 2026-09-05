@@ -219,7 +219,7 @@ bool mountCard(bool formatRequested) {
     }
 
     sd.end(); sdSpi.end(); spiStarted = false;
-    if (cardTransportReady) break; // FAT invalid: lower clock cannot repair it.
+    if (cardTransportReady) break;
     delay(20);
   }
   closeStorage(); scheduleRetry();
@@ -259,7 +259,7 @@ void queueRfFrame(const DavisFrameDiagnostic &f) {
   const uint8_t type = f.crcOk ? static_cast<uint8_t>(f.normalized[0] >> 4U) : 0U;
   char line[LINE_SIZE];
   snprintf(line, sizeof(line),
-           "%s,%lu,davis_rf,%u,%s,%u,%.6f,%.1f,%u,%04X,%04X,,,,,,,,,,,,,,,,,,,%s,%s",
+           "%s,%lu,davis_rf,%u,%s,%u,%.6f,%.1f,%u,%04X,%04X,,,,,,,,,,,,,,,,,,,,%s,%s",
            ts, static_cast<unsigned long>(f.timestampMs), static_cast<unsigned>(stationId),
            f.crcOk ? davisPacketTypeName(type) : "", static_cast<unsigned>(f.channel + 1U),
            f.frequencyMhz, isfinite(f.rssi) ? f.rssi : 0.0f, f.crcOk ? 1U : 0U,
@@ -282,7 +282,7 @@ void queueWeather(const StationState &s) {
   const LightningState ls = getLightningState();
   char line[LINE_SIZE];
   snprintf(line, sizeof(line),
-           "%s,%lu,weather,%u,%s,,,,,,,,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%u,%lu,%lu,%u,,",
+           "%s,%lu,weather,%u,%s,,,,,,,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%u,%lu,%lu,%u,,",
            ts, static_cast<unsigned long>(millis()), s.locked ? static_cast<unsigned>(s.stationId + 1U) : 0U,
            davisPacketTypeName(s.lastPacketType), temp, hum, wind, gust, dir, rain, rate, month, year, uv, solar,
            pAbs, pSl, tin, hin,
@@ -301,9 +301,11 @@ void queueLightningEventIfNeeded() {
   char ts[24]; timestampUtc(ts, sizeof(ts));
   char line[LINE_SIZE];
   snprintf(line, sizeof(line),
-           "%s,%lu,lightning,,,,,,,,,,,,,,,,,,,,,,,,%u,%lu,%lu,,,,",
+           "%s,%lu,lightning,,,,,,,,,,,,,,,,,,,,,,,,%u,%lu,%lu,, ,",
            ts, static_cast<unsigned long>(millis()), static_cast<unsigned>(ls.lastDistanceKm),
            static_cast<unsigned long>(ls.lastEnergy), static_cast<unsigned long>(ls.lightningTotal));
+  // Keep the last three CSV fields empty: battery_low, raw, normalized.
+  for (char *p = line; *p; ++p) if (*p == ' ' && p > line && p[-1] == ',' && p[1] == ',') *p = ',';
   queueLine(line);
 }
 

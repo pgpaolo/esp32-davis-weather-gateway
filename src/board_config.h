@@ -16,6 +16,13 @@
 #define PROVISION_BUTTON_ENABLE 1
 #define PROVISION_BUTTON_PIN    0
 #define PROVISION_BUTTON_ACTIVE LOW
+
+// LILYGO T3-S3 V1.2/V1.3 onboard microSD, dedicated SPI bus.
+#define SDCARD_SUPPORTED    1
+#define SDCARD_MOSI_PIN     11
+#define SDCARD_MISO_PIN     2
+#define SDCARD_SCLK_PIN     14
+#define SDCARD_CS_PIN       13
 #else
 #define BOARD_NAME          "LILYGO T3 V1.6.1 SX1276 868"
 #define I2C_SDA_PIN         21
@@ -34,6 +41,13 @@
 #define PROVISION_BUTTON_ENABLE 0
 #define PROVISION_BUTTON_PIN    0
 #define PROVISION_BUTTON_ACTIVE LOW
+
+// LILYGO T3 / LoRa32 V1.6.1 onboard microSD, dedicated SPI bus.
+#define SDCARD_SUPPORTED    1
+#define SDCARD_MOSI_PIN     15
+#define SDCARD_MISO_PIN     2
+#define SDCARD_SCLK_PIN     14
+#define SDCARD_CS_PIN       13
 #endif
 
 // Both supported LILYGO profiles use the on-board 128x64 SSD1306 on the shared

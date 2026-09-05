@@ -5,7 +5,7 @@
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "0.3.2-dev"
+#define FIRMWARE_VERSION "0.4.0-dev"
 #endif
 
 #ifndef DEVICE_HOSTNAME_DEFAULT
@@ -72,8 +72,6 @@
 #define MB_UPLOAD_INTERVAL_MS 10000UL
 #endif
 #ifndef MB_TLS_INSECURE_DEFAULT
-// Secure by default. Insecure TLS must be enabled explicitly by the installer
-// when a trusted CA certificate is not configured.
 #define MB_TLS_INSECURE_DEFAULT 0
 #endif
 #ifndef MB_ROOT_CA

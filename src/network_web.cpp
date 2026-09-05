@@ -1,6 +1,7 @@
 #include "network_web.h"
 
 #include <WiFi.h>
+#include <esp_ota_ops.h>
 
 #include "network_manager.h"
 #include "runtime_config.h"
@@ -24,6 +25,32 @@ String wifiStateJson() {
   j+=",\"current_ssid\":\""+escJson(networkSsid())+"\",\"ip\":\""+escJson(networkIp())+"\",\"rssi_dbm\":";
   j+=networkConnected()?String(WiFi.RSSI()):String("null");
   j+=",\"mode\":\""+escJson(networkModeName())+"\"}";
+  return j;
+}
+
+String controllerMetricsJson() {
+  const esp_partition_t *running=esp_ota_get_running_partition();
+  const esp_partition_t *next=esp_ota_get_next_update_partition(nullptr);
+  const uint32_t psramTotal=ESP.getPsramSize();
+  const uint32_t psramFree=psramTotal?ESP.getFreePsram():0U;
+  String j;j.reserve(760);
+  j="{\"chip_model\":\""+escJson(String(ESP.getChipModel()))+"\"";
+  j+=",\"chip_revision\":"+String(ESP.getChipRevision());
+  j+=",\"cores\":"+String(ESP.getChipCores());
+  j+=",\"cpu_mhz\":"+String(ESP.getCpuFreqMHz());
+  j+=",\"chip_temperature_c\":"+String(temperatureRead(),1);
+  j+=",\"heap_free\":"+String(ESP.getFreeHeap());
+  j+=",\"heap_min\":"+String(ESP.getMinFreeHeap());
+  j+=",\"heap_max_block\":"+String(ESP.getMaxAllocHeap());
+  j+=",\"flash_total\":"+String(ESP.getFlashChipSize());
+  j+=",\"firmware_size\":"+String(ESP.getSketchSize());
+  j+=",\"running_slot\":\""+String(running?running->label:"--")+"\"";
+  j+=",\"running_slot_size\":"+String(running?running->size:0U);
+  j+=",\"ota_slot\":\""+String(next?next->label:"--")+"\"";
+  j+=",\"ota_slot_size\":"+String(next?next->size:0U);
+  j+=",\"psram_total\":"+String(psramTotal);
+  j+=",\"psram_free\":"+String(psramFree);
+  j+=",\"temperature_note\":\"Sensore interno SoC: diagnostico, non temperatura ambiente\"}";
   return j;
 }
 
@@ -56,6 +83,11 @@ void registerNetworkWebRoutes(WebServer &server) {
   server.on("/api/network/wifi",HTTP_GET,[&server](){
     server.sendHeader("Cache-Control","no-store");
     server.send(200,"application/json",wifiStateJson());
+  });
+
+  server.on("/api/system/controller",HTTP_GET,[&server](){
+    server.sendHeader("Cache-Control","no-store");
+    server.send(200,"application/json",controllerMetricsJson());
   });
 
   server.on("/api/network/scan/start",HTTP_POST,[&server](){

@@ -9,6 +9,7 @@
 #include "config.h"
 #include "davis_radio.h"
 #include "display_control.h"
+#include "firmware_update.h"
 #include "lightning_manager.h"
 #include "meteobridge_client.h"
 #include "mqtt_publisher.h"
@@ -39,21 +40,21 @@ String sdStateJson(){String j=sdLoggerStatusJson();const SdLoggerConfig c=getSdL
 
 String stateJson(){
   const StationState&s=*statePtr;const UploadStatus&up=getUploadStatus();const MqttRuntimeConfig mc=getMqttConfig();const MqttRuntimeStatus&ms=getMqttStatus();
-  String j;j.reserve(10500);j="{\"firmware\":\""+String(FIRMWARE_VERSION)+"\",\"board\":\""+String(BOARD_NAME)+"\"";
+  String j;j.reserve(11200);j="{\"firmware\":\""+String(FIRMWARE_VERSION)+"\",\"board\":\""+String(BOARD_NAME)+"\"";
   j+=",\"system\":"+systemJson();
   j+=",\"display\":"+displayControlJson();
   j+=",\"network\":{\"connected\":";j+=networkConnected()?"true":"false";j+=",\"ip\":\""+escJson(networkIp())+"\",\"ssid\":\""+escJson(networkSsid())+"\",\"mode\":\""+escJson(networkModeName())+"\"}";
   j+=",\"weather\":{\"temperature_c\":"+jf(s.outTempC)+",\"humidity_pct\":"+jf(s.outHumidity,0)+",\"dewpoint_c\":"+jf(calcDewPointC(s.outTempC,s.outHumidity))+",\"wind_kmh\":"+jf(s.windKmh)+",\"gust_kmh\":"+jf(s.windGustKmh)+",\"direction_deg\":"+jf(s.windDirDeg,0)+",\"wind_chill_c\":"+jf(calcWindChillC(s.outTempC,s.windKmh))+",\"rain_rate_mmh\":"+jf(s.rainRateMmH)+",\"rain_day_mm\":"+jf(s.rainDayMm)+",\"rain_month_mm\":"+jf(s.rainMonthMm)+",\"rain_year_mm\":"+jf(s.rainYearMm)+",\"uv\":"+jf(s.uv)+",\"solar_wm2\":"+jf(s.solarWm2,0)+"}";
   j+=",\"rf\":"+rfJsonWithAge(false);j+=",\"bme\":"+pressureStatusJson(s);j+=",\"lightning\":"+lightningStateJson();
   j+=",\"mqtt\":{\"enabled\":";j+=mc.enabled?"true":"false";j+=",\"connected\":";j+=ms.connected?"true":"false";j+=",\"broker\":\""+escJson(mc.broker)+"\",\"tls\":\""+String(mqttTlsModeName(mc.tlsMode))+"\",\"connect_attempts\":"+String(ms.connectAttempts)+",\"publishes\":"+String(ms.publishes)+",\"last_error\":\""+escJson(ms.lastError)+"\"}";
-  j+=",\"sd\":"+sdStateJson();j+=",\"remote\":"+remoteAccessStatusJson();
+  j+=",\"sd\":"+sdStateJson();j+=",\"remote\":"+remoteAccessStatusJson();j+=",\"firmware_update\":"+firmwareUpdateStatusJson();
   j+=",\"upload\":{\"attempts\":"+String(up.attempts)+",\"successes\":"+String(up.successes)+",\"last_http_code\":"+String(up.lastHttpCode)+",\"last_attempt_age_ms\":"+(up.lastAttemptMs?String((uint32_t)(millis()-up.lastAttemptMs)):String("0"))+",\"last_success_age_ms\":"+(up.lastSuccessMs?String((uint32_t)(millis()-up.lastSuccessMs)):String("0"))+",\"last_message\":\""+escJson(up.lastMessage)+"\"}}";
   return j;
 }
 
 String configJson(){String j;j.reserve(850);j="{\"hostname\":\""+escJson(runtimeConfig.hostname)+"\",\"dhcp\":";j+=runtimeConfig.useDhcp?"true":"false";j+=",\"static_ip\":\""+escJson(runtimeConfig.staticIp)+"\",\"gateway\":\""+escJson(runtimeConfig.gateway)+"\",\"netmask\":\""+escJson(runtimeConfig.netmask)+"\",\"dns\":\""+escJson(runtimeConfig.dns)+"\",\"iss_id\":"+String(runtimeConfig.issId)+",\"rain_tip_mm\":"+String(runtimeConfig.rainMmPerTip,3)+",\"bme_altitude_m\":"+String(runtimeConfig.bmeAltitudeM,1)+",\"timezone\":\""+escJson(runtimeConfig.tzInfo)+"\",\"mb_url\":\""+escJson(runtimeConfig.mbUrl)+"\",\"upload_interval_ms\":"+String(runtimeConfig.uploadIntervalMs)+",\"tls_insecure\":";j+=runtimeConfig.tlsInsecure?"true":"false";j+="}";return j;}
 
-String diagnosticReport(){String r;r.reserve(17000);r+=davisRadioDiagnosticReport(*statePtr,runtimeConfig.issId);r+="\nSystem:\nReset: "+String(resetReasonName())+"\nUptime ms: "+String(millis())+"\nFree heap: "+String(ESP.getFreeHeap())+"\nMin free heap: "+String(ESP.getMinFreeHeap())+"\nCPU MHz: "+String(ESP.getCpuFreqMHz())+"\nWiFi: "+String(networkConnected()?"connected":"offline")+"\nIP: "+networkIp()+"\nWiFi RSSI: "+(networkConnected()?String(WiFi.RSSI())+" dBm":String("--"))+"\n\nDisplay:\n"+displayControlJson()+"\n\nBME280:\n"+pressureStatusJson(*statePtr)+"\n\nAS3935:\n"+lightningStateJson()+"\n\nMQTT:\n"+mqttStatusJson()+"\n\nmicroSD:\n"+sdLoggerStatusJson()+"\n\nAdminSensor Remote:\n"+remoteAccessStatusJson()+"\n\nHTTP upload:\n";const UploadStatus&u=getUploadStatus();r+="Attempts="+String(u.attempts)+" Successes="+String(u.successes)+" LastHTTP="+String(u.lastHttpCode)+" Message="+u.lastMessage+"\n";return r;}
+String diagnosticReport(){String r;r.reserve(17800);r+=davisRadioDiagnosticReport(*statePtr,runtimeConfig.issId);r+="\nSystem:\nReset: "+String(resetReasonName())+"\nUptime ms: "+String(millis())+"\nFree heap: "+String(ESP.getFreeHeap())+"\nMin free heap: "+String(ESP.getMinFreeHeap())+"\nCPU MHz: "+String(ESP.getCpuFreqMHz())+"\nWiFi: "+String(networkConnected()?"connected":"offline")+"\nIP: "+networkIp()+"\nWiFi RSSI: "+(networkConnected()?String(WiFi.RSSI())+" dBm":String("--"))+"\n\nDisplay:\n"+displayControlJson()+"\n\nBME280:\n"+pressureStatusJson(*statePtr)+"\n\nAS3935:\n"+lightningStateJson()+"\n\nMQTT:\n"+mqttStatusJson()+"\n\nmicroSD:\n"+sdLoggerStatusJson()+"\n\nAdminSensor Remote:\n"+remoteAccessStatusJson()+"\n\nFirmware update:\n"+firmwareUpdateStatusJson()+"\n\nHTTP upload:\n";const UploadStatus&u=getUploadStatus();r+="Attempts="+String(u.attempts)+" Successes="+String(u.successes)+" LastHTTP="+String(u.lastHttpCode)+" Message="+u.lastMessage+"\n";return r;}
 
 void sendDashboard(){noCache();server.sendHeader("Content-Encoding","gzip");server.send_P(200,"text/html; charset=utf-8",(PGM_P)WEB_UI_GZ,WEB_UI_GZ_LEN);}
 } // namespace
@@ -90,6 +91,7 @@ void initWeb(StationState &station){
   });
   server.on("/api/remote/config",HTTP_GET,[]{server.send(200,"application/json",remoteAccessConfigJson());});
   server.on("/api/remote/status",HTTP_GET,[]{server.send(200,"application/json",remoteAccessStatusJson());});
+  registerFirmwareUpdateRoutes(server);
 
   server.on("/api/display",HTTP_POST,[]{
     if(!server.hasArg("enabled")){server.send(400,"text/plain","Parametro enabled mancante");return;}
@@ -134,5 +136,5 @@ void initWeb(StationState &station){
   server.onNotFound([](){server.send(404,"text/plain","Not found");});server.begin();started=true;
 }
 
-void serviceWeb(){if(started)server.handleClient();}
+void serviceWeb(){if(started){server.handleClient();serviceFirmwareUpdate();}}
 bool webStarted(){return started;}

@@ -7,6 +7,7 @@
 #include <mbedtls/sha256.h>
 
 #include "config.h"
+#include "network_web.h"
 #include "sd_logger.h"
 
 namespace {
@@ -308,6 +309,11 @@ bool firmwareRemoteEnd(String &error) { return finishUpdate(UpdateSource::REMOTE
 void firmwareRemoteAbort(const String &reason) { abortUpdate(UpdateSource::REMOTE,reason); }
 
 void registerFirmwareUpdateRoutes(WebServer &server) {
+  // The firmware tab and the Wi-Fi configuration card share the same local
+  // management WebServer. Register the network routes here to keep a single
+  // HTTP listener and avoid a second management port.
+  registerNetworkWebRoutes(server);
+
   server.on("/api/firmware/status",HTTP_GET,[&server](){
     server.sendHeader("Cache-Control","no-store");
     server.send(200,"application/json",firmwareUpdateStatusJson());

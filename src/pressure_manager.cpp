@@ -1,15 +1,15 @@
 #include "pressure_manager.h"
 
-#include <Adafruit_BME280.h>
 #include <Wire.h>
 #include <math.h>
 
+#include "bme280_minimal.h"
 #include "board_config.h"
 #include "config.h"
 #include "runtime_config.h"
 
 namespace {
-Adafruit_BME280 bme;
+Bme280Minimal bme;
 PressureSensorStatus status;
 
 constexpr uint32_t READ_INTERVAL_MS = 5000UL;
@@ -37,17 +37,11 @@ void configureWire() {
 }
 
 bool tryAddress(uint8_t address) {
-  if (!bme.begin(address, &Wire)) return false;
+  if (!bme.begin(address, Wire)) return false;
   status.detected = true;
   status.address = address;
   status.detectFailures = 0;
   status.consecutiveInvalid = 0;
-  bme.setSampling(Adafruit_BME280::MODE_NORMAL,
-                  Adafruit_BME280::SAMPLING_X2,
-                  Adafruit_BME280::SAMPLING_X16,
-                  Adafruit_BME280::SAMPLING_X1,
-                  Adafruit_BME280::FILTER_X4,
-                  Adafruit_BME280::STANDBY_MS_500);
   return true;
 }
 
@@ -98,7 +92,7 @@ bool initPressureSensor() {
   configureWire();
   const bool ok = detectBme();
   if (ok) {
-    Serial.print(F("[BME] BME280 @0x")); Serial.println(status.address, HEX);
+    Serial.print(F("[BME] BME280 minimal @0x")); Serial.println(status.address, HEX);
   } else {
     Serial.println(F("[BME] non rilevato; retry non bloccante attivo"));
   }
@@ -118,10 +112,9 @@ void servicePressureSensor(StationState &station) {
   if ((uint32_t)(now - status.lastReadMs) < READ_INTERVAL_MS) return;
   status.lastReadMs = now;
 
-  const float pressurePa = bme.readPressure();
-  const float temp = bme.readTemperature();
-  const float hum = bme.readHumidity();
-  if (!isfinite(pressurePa) || pressurePa < 30000.0f || pressurePa > 120000.0f) {
+  float temp = NAN, pressurePa = NAN, hum = NAN;
+  const bool readOk = bme.read(temp, pressurePa, hum);
+  if (!readOk || !isfinite(pressurePa) || pressurePa < 30000.0f || pressurePa > 120000.0f) {
     status.readErrors++;
     if (status.consecutiveInvalid < 250) status.consecutiveInvalid++;
     if (status.consecutiveInvalid >= 3) {
@@ -174,6 +167,7 @@ String pressureStatusJson(const StationState &s) {
   String out; out.reserve(360);
   out = "{\"detected\":"; out += status.detected ? "true" : "false";
   out += ",\"address\":" + String(status.address);
+  out += ",\"driver\":\"minimal\"";
   out += ",\"absolute_hpa\":" + jfloat(s.pressureAbsoluteHpa);
   out += ",\"sea_level_hpa\":" + jfloat(s.pressureHpa);
   out += ",\"temperature_c\":" + jfloat(s.indoorTempC);

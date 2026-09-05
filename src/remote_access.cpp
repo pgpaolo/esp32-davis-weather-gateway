@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "config.h"
+#include "firmware_update.h"
 #include "network_manager.h"
 #include "remote_trust.h"
 #include "runtime_config.h"
@@ -26,7 +27,7 @@ namespace {
 constexpr const char *NVS_NS="remote", *NVS_URL="url", *NVS_TOKEN="token";
 constexpr time_t TLS_EPOCH=1700000000;
 constexpr uint32_t RETRY_PENDING=30000UL, RETRY_ERROR=15000UL, RETRY_APPROVED=60000UL;
-constexpr size_t MAX_REQ=12288U, MAX_RESP=24576U, MAX_WS=38000U;
+constexpr size_t MAX_REQ=12288U, MAX_RESP=24576U, MAX_WS=38000U, FW_CHUNK_MAX=8192U;
 
 struct UrlParts{String host,path;uint16_t port=443;};
 struct LocalResp{int code=502;String type="text/plain; charset=utf-8",encoding,location,cache,disposition;std::vector<uint8_t> body;};
@@ -73,16 +74,53 @@ bool localHttp(String method,const String&path,const JsonObjectConst&headers,con
 
 void sendResp(const String&id,const LocalResp&r){String b=b64enc(r.body.data(),r.body.size());String o;o.reserve(b.length()+650);o="{\"type\":\"http_response\",\"id\":\""+esc(id)+"\",\"status\":"+String(r.code)+",\"headers\":{\"content-type\":\""+esc(r.type)+"\"";if(!r.encoding.isEmpty())o+=",\"content-encoding\":\""+esc(r.encoding)+"\"";if(!r.location.isEmpty())o+=",\"location\":\""+esc(r.location)+"\"";if(!r.cache.isEmpty())o+=",\"cache-control\":\""+esc(r.cache)+"\"";if(!r.disposition.isEmpty())o+=",\"content-disposition\":\""+esc(r.disposition)+"\"";o+="},\"body_b64\":\""+b+"\"}";if(o.length()<=MAX_WS&&ws.sendTXT(o)){if(take()){st.responses++;st.lastActivityMs=millis();give();}}}
 void sendErr(const String&id,int code,const String&msg){LocalResp r;r.code=code;r.body.assign(msg.c_str(),msg.c_str()+msg.length());sendResp(id,r);}
+void sendFw(const String&type,const String&id,const String&extra=""){String o="{\"type\":\""+type+"\",\"id\":\""+esc(id)+"\"";if(!extra.isEmpty())o+=","+extra;o+="}";ws.sendTXT(o);}
+void sendFwError(const String&id,const String&msg){sendFw("firmware_error",id,"\"message\":\""+esc(msg)+"\"");}
 
-void wsText(uint8_t*p,size_t n){if(!p||!n||n>MAX_WS)return;JsonDocument d;if(deserializeJson(d,p,n))return;String type=d["type"]|"",id=d["id"]|"";if(take()){st.lastActivityMs=millis();give();}if(type=="ping"){String x="{\"type\":\"pong\"";if(!id.isEmpty())x+=",\"id\":\""+esc(id)+"\"";x+="}";ws.sendTXT(x);return;}if(type!="http_request"||id.isEmpty())return;if(take()){st.requests++;give();}String method=d["method"]|"GET",path=d["path"]|"/",bb=d["body_b64"]|"";std::vector<uint8_t>body;if(!b64dec(bb,body)){sendErr(id,413,"Request body non valido");return;}LocalResp r;String e;if(!localHttp(method,path,d["headers"].as<JsonObjectConst>(),body,r,e)){sendErr(id,502,e);return;}sendResp(id,r);}
+void wsText(uint8_t*p,size_t n){
+  if(!p||!n||n>MAX_WS)return;
+  JsonDocument d;if(deserializeJson(d,p,n))return;
+  String type=d["type"]|"",id=d["id"]|"";
+  if(take()){st.lastActivityMs=millis();give();}
+  if(type=="ping"){String x="{\"type\":\"pong\"";if(!id.isEmpty())x+=",\"id\":\""+esc(id)+"\"";x+="}";ws.sendTXT(x);return;}
 
-void wsEvent(WStype_t t,uint8_t*p,size_t n){if(t==WStype_CONNECTED){if(take()){st.transportActive=true;st.approved=true;st.state="ONLINE";st.wsConnects++;st.lastActivityMs=millis();st.lastError="";give();}Serial.println(F("[REMOTE] AdminSensor ONLINE"));}else if(t==WStype_DISCONNECTED){if(take()){bool was=st.transportActive;st.transportActive=false;if(st.configured&&st.approved)st.state="RECONNECT";if(was)st.wsDisconnects++;give();}}else if(t==WStype_TEXT)wsText(p,n);else if(t==WStype_PING||t==WStype_PONG){if(take()){st.lastActivityMs=millis();give();}}}
+  if(type=="firmware_begin"&& !id.isEmpty()){
+    const size_t size=(size_t)(d["size"]|0U);String sha=d["sha256"]|"",e;
+    if(!firmwareRemoteBegin(size,sha,e)){sendFwError(id,e);return;}
+    sendFw("firmware_ready",id,"\"max_chunk\":"+String(FW_CHUNK_MAX)+",\"status\":\"ready\"");
+    return;
+  }
+  if(type=="firmware_chunk"&& !id.isEmpty()){
+    const uint32_t seq=d["seq"]|0U;String bb=d["body_b64"]|"";std::vector<uint8_t>body;
+    if(!b64dec(bb,body)||body.empty()||body.size()>FW_CHUNK_MAX){sendFwError(id,"Blocco firmware Base64 non valido");firmwareRemoteAbort("Blocco remoto non valido");return;}
+    String e;if(!firmwareRemoteWrite(seq,body.data(),body.size(),e)){sendFwError(id,e);return;}
+    sendFw("firmware_ack",id,"\"seq\":"+String(seq));
+    return;
+  }
+  if(type=="firmware_end"&& !id.isEmpty()){
+    String e;if(!firmwareRemoteEnd(e)){sendFwError(id,e);return;}
+    sendFw("firmware_complete",id,"\"status\":\"ok\",\"restart\":true");
+    return;
+  }
+  if(type=="firmware_abort"&& !id.isEmpty()){
+    firmwareRemoteAbort("Aggiornamento annullato dal portale");sendFw("firmware_aborted",id,"\"status\":\"ok\"");return;
+  }
 
-bool enroll(const String&portal,String&wsUrl,bool&pending){pending=false;wsUrl="";WiFiClientSecure c;c.setCACert(REMOTE_TRUST_CA);c.setTimeout(8000);HTTPClient h;h.setConnectTimeout(7000);h.setTimeout(8000);if(!h.begin(c,portal+"/api/device/enroll")){setState("ERROR","HTTPS enroll init fallita");return false;}h.addHeader("Content-Type","application/json");JsonDocument q;q["device_id"]=remoteDefaultDeviceId();q["device_token"]=token;q["name"]=runtimeConfig.hostname.isEmpty()?"Stazione meteo":runtimeConfig.hostname;q["model"]="ESP32 Davis Weather Gateway";q["firmware_version"]=FIRMWARE_VERSION;String body;serializeJson(q,body);if(take()){st.enrollAttempts++;give();}int code=h.POST(body);String resp=code>0?h.getString():String();h.end();if(take()){st.lastEnrollHttpCode=code;st.lastActivityMs=millis();give();}if(code<200||code>=300){setState("ERROR",code>0?String("Enroll HTTP ")+code:"Errore TLS/HTTP enroll");return false;}JsonDocument d;if(deserializeJson(d,resp)){setState("ERROR","Risposta enroll JSON non valida");return false;}String s=d["status"]|"";if(s=="pending"){pending=true;if(take()){st.approved=false;st.transportActive=false;give();}setState("PENDING");return true;}if(s!="approved"){if(take()){st.approved=false;st.transportActive=false;give();}setState("DENIED",s.isEmpty()?"Stato enroll mancante":String("Stato portale: ")+s);return false;}wsUrl=d["websocket_url"]|"";UrlParts u;if(!parseUrl(wsUrl,"wss",u)){setState("ERROR","websocket_url WSS non valido");return false;}if(take()){st.approved=true;st.lastError="";give();}setState("APPROVED");return true;}
+  if(type!="http_request"||id.isEmpty())return;
+  if(firmwareUpdateInProgress()){sendErr(id,503,"Aggiornamento firmware in corso");return;}
+  if(take()){st.requests++;give();}
+  String method=d["method"]|"GET",path=d["path"]|"/",bb=d["body_b64"]|"";std::vector<uint8_t>body;
+  if(!b64dec(bb,body)){sendErr(id,413,"Request body non valido");return;}
+  LocalResp r;String e;if(!localHttp(method,path,d["headers"].as<JsonObjectConst>(),body,r,e)){sendErr(id,502,e);return;}sendResp(id,r);
+}
+
+void wsEvent(WStype_t t,uint8_t*p,size_t n){if(t==WStype_CONNECTED){if(take()){st.transportActive=true;st.approved=true;st.state="ONLINE";st.wsConnects++;st.lastActivityMs=millis();st.lastError="";give();}Serial.println(F("[REMOTE] AdminSensor ONLINE"));}else if(t==WStype_DISCONNECTED){firmwareRemoteAbort("WebSocket AdminSensor disconnesso");if(take()){bool was=st.transportActive;st.transportActive=false;if(st.configured&&st.approved)st.state="RECONNECT";if(was)st.wsDisconnects++;give();}}else if(t==WStype_TEXT)wsText(p,n);else if(t==WStype_PING||t==WStype_PONG){if(take()){st.lastActivityMs=millis();give();}}}
+
+bool enroll(const String&portal,String&wsUrl,bool&pending){pending=false;wsUrl="";WiFiClientSecure c;c.setCACert(REMOTE_TRUST_CA);c.setTimeout(8000);HTTPClient h;h.setConnectTimeout(7000);h.setTimeout(8000);if(!h.begin(c,portal+"/api/device/enroll")){setState("ERROR","HTTPS enroll init fallita");return false;}h.addHeader("Content-Type","application/json");JsonDocument q;q["device_id"]=remoteDefaultDeviceId();q["device_token"]=token;q["name"]=runtimeConfig.hostname.isEmpty()?"Stazione meteo":runtimeConfig.hostname;q["model"]="ESP32 Davis Weather Gateway";q["firmware_version"]=FIRMWARE_VERSION;q["capabilities"]["remote_http"]=true;q["capabilities"]["firmware_update"]=true;q["capabilities"]["firmware_chunk_bytes"]=(uint32_t)FW_CHUNK_MAX;String body;serializeJson(q,body);if(take()){st.enrollAttempts++;give();}int code=h.POST(body);String resp=code>0?h.getString():String();h.end();if(take()){st.lastEnrollHttpCode=code;st.lastActivityMs=millis();give();}if(code<200||code>=300){setState("ERROR",code>0?String("Enroll HTTP ")+code:"Errore TLS/HTTP enroll");return false;}JsonDocument d;if(deserializeJson(d,resp)){setState("ERROR","Risposta enroll JSON non valida");return false;}String s=d["status"]|"";if(s=="pending"){pending=true;if(take()){st.approved=false;st.transportActive=false;give();}setState("PENDING");return true;}if(s!="approved"){if(take()){st.approved=false;st.transportActive=false;give();}setState("DENIED",s.isEmpty()?"Stato enroll mancante":String("Stato portale: ")+s);return false;}wsUrl=d["websocket_url"]|"";UrlParts u;if(!parseUrl(wsUrl,"wss",u)){setState("ERROR","websocket_url WSS non valido");return false;}if(take()){st.approved=true;st.lastError="";give();}setState("APPROVED");return true;}
 
 bool startWs(const String&url){UrlParts u;if(!parseUrl(url,"wss",u))return false;ws.disconnect();ws.beginSslWithCA(u.host.c_str(),u.port,u.path.c_str(),REMOTE_TRUST_CA,"");wsAuth="Authorization: Bearer "+token;ws.setExtraHeaders(wsAuth.c_str());ws.setReconnectInterval(5000);ws.enableHeartbeat(30000,5000,2);activeWsUrl=url;wsStarted=true;setState("CONNECTING");return true;}
 
-void task(void*){uint32_t seen=0,next=0;for(;;){RemoteAccessConfig c;if(take()){c=cfg;give();}uint32_t g=generation;bool fr=forceRetry;if(fr)forceRetry=false;if(g!=seen||fr){seen=g;if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;if(take()){st.transportActive=false;st.approved=false;give();}}if(c.portalUrl.isEmpty()){setState("OFF");vTaskDelay(pdMS_TO_TICKS(300));continue;}if(!networkConnected()||networkProvisioningActive()){if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}if(time(nullptr)<TLS_EPOCH){setState("WAIT_TIME");vTaskDelay(pdMS_TO_TICKS(500));continue;}uint32_t now=millis();bool online=false;if(take()){online=st.transportActive;give();}if(next==0||(!online&&(int32_t)(now-next)>=0)){bool pending=false;String u;setState("ENROLLING");bool ok=enroll(c.portalUrl,u,pending);if(ok&&pending){if(wsStarted){ws.disconnect();wsStarted=false;}next=millis()+RETRY_PENDING;}else if(ok&&!u.isEmpty()){if(!wsStarted||u!=activeWsUrl)startWs(u);next=millis()+RETRY_APPROVED;}else next=millis()+RETRY_ERROR;}if(wsStarted)ws.loop();vTaskDelay(pdMS_TO_TICKS(8));}}
+void task(void*){uint32_t seen=0,next=0;for(;;){RemoteAccessConfig c;if(take()){c=cfg;give();}uint32_t g=generation;bool fr=forceRetry;if(fr)forceRetry=false;if(g!=seen||fr){seen=g;firmwareRemoteAbort("Configurazione remota cambiata");if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;if(take()){st.transportActive=false;st.approved=false;give();}}if(c.portalUrl.isEmpty()){setState("OFF");vTaskDelay(pdMS_TO_TICKS(300));continue;}if(!networkConnected()||networkProvisioningActive()){if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}if(time(nullptr)<TLS_EPOCH){setState("WAIT_TIME");vTaskDelay(pdMS_TO_TICKS(500));continue;}uint32_t now=millis();bool online=false;if(take()){online=st.transportActive;give();}if(next==0||(!online&&(int32_t)(now-next)>=0)){bool pending=false;String u;setState("ENROLLING");bool ok=enroll(c.portalUrl,u,pending);if(ok&&pending){if(wsStarted){ws.disconnect();wsStarted=false;}next=millis()+RETRY_PENDING;}else if(ok&&!u.isEmpty()){if(!wsStarted||u!=activeWsUrl)startWs(u);next=millis()+RETRY_APPROVED;}else next=millis()+RETRY_ERROR;}if(wsStarted)ws.loop();vTaskDelay(pdMS_TO_TICKS(8));}}
 }
 
 String remoteDefaultDeviceId(){static String id=makeId();return id;}
@@ -90,5 +128,5 @@ void initRemoteAccess(){if(!mux)mux=xSemaphoreCreateMutex();load();if(take()){st
 RemoteAccessConfig getRemoteAccessConfig(){RemoteAccessConfig o;if(take()){o=cfg;give();}return o;}RemoteAccessStatus getRemoteAccessStatus(){RemoteAccessStatus o;if(take()){o=st;give();}return o;}
 bool saveRemoteAccessPortalUrl(const String&in){String u=in;if(!normalizePortal(u))return false;Preferences p;if(!p.begin(NVS_NS,false))return false;p.putString(NVS_URL,u);p.end();if(take()){cfg.portalUrl=u;st.configured=!u.isEmpty();st.approved=false;st.transportActive=false;st.state=u.isEmpty()?"OFF":"WAIT_NETWORK";st.lastError="";give();}generation++;return true;}
 bool resetRemoteAccessConfig(){return saveRemoteAccessPortalUrl("");}void retryRemoteAccessNow(){forceRetry=true;}
-String remoteAccessConfigJson(){RemoteAccessConfig c=getRemoteAccessConfig();String j="{\"portal_url\":\""+esc(c.portalUrl)+"\",\"device_id\":\""+esc(remoteDefaultDeviceId())+"\",\"has_token\":";j+=validToken(token)?"true":"false";j+=",\"identity_managed_by_firmware\":true}";return j;}
-String remoteAccessStatusJson(){RemoteAccessStatus s=getRemoteAccessStatus();String j="{\"initialized\":";j+=s.initialized?"true":"false";j+=",\"configured\":";j+=s.configured?"true":"false";j+=",\"approved\":";j+=s.approved?"true":"false";j+=",\"transport_active\":";j+=s.transportActive?"true":"false";j+=",\"state\":\""+esc(s.state)+"\",\"device_id\":\""+esc(s.deviceId)+"\",\"enroll_attempts\":"+String(s.enrollAttempts)+",\"last_enroll_http_code\":"+String(s.lastEnrollHttpCode)+",\"ws_connects\":"+String(s.wsConnects)+",\"ws_disconnects\":"+String(s.wsDisconnects)+",\"requests\":"+String(s.requests)+",\"responses\":"+String(s.responses)+",\"last_activity_age_ms\":"+(s.lastActivityMs?String((uint32_t)(millis()-s.lastActivityMs)):String("null"))+",\"last_error\":\""+esc(s.lastError)+"\"}";return j;}
+String remoteAccessConfigJson(){RemoteAccessConfig c=getRemoteAccessConfig();String j="{\"portal_url\":\""+esc(c.portalUrl)+"\",\"device_id\":\""+esc(remoteDefaultDeviceId())+"\",\"has_token\":";j+=validToken(token)?"true":"false";j+=",\"identity_managed_by_firmware\":true,\"firmware_update\":true,\"firmware_chunk_bytes\":"+String(FW_CHUNK_MAX)+"}";return j;}
+String remoteAccessStatusJson(){RemoteAccessStatus s=getRemoteAccessStatus();String j="{\"initialized\":";j+=s.initialized?"true":"false";j+=",\"configured\":";j+=s.configured?"true":"false";j+=",\"approved\":";j+=s.approved?"true":"false";j+=",\"transport_active\":";j+=s.transportActive?"true":"false";j+=",\"state\":\""+esc(s.state)+"\",\"device_id\":\""+esc(s.deviceId)+"\",\"enroll_attempts\":"+String(s.enrollAttempts)+",\"last_enroll_http_code\":"+String(s.lastEnrollHttpCode)+",\"ws_connects\":"+String(s.wsConnects)+",\"ws_disconnects\":"+String(s.wsDisconnects)+",\"requests\":"+String(s.requests)+",\"responses\":"+String(s.responses)+",\"firmware_update\":true,\"last_activity_age_ms\":"+(s.lastActivityMs?String((uint32_t)(millis()-s.lastActivityMs)):String("null"))+",\"last_error\":\""+esc(s.lastError)+"\"}";return j;}

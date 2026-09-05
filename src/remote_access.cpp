@@ -32,6 +32,7 @@ constexpr time_t TLS_EPOCH=1700000000;
 constexpr uint32_t RETRY_PENDING=30000UL, RETRY_ERROR=15000UL, RETRY_APPROVED=60000UL;
 constexpr size_t MAX_REQ=12288U, MAX_RESP=24576U, MAX_WS=38000U;
 constexpr UBaseType_t HTTP_QUEUE_LEN=4;
+constexpr char B64_TABLE[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 struct UrlParts{String host,path;uint16_t port=443;};
 struct LocalResp{int code=502;String type="text/plain; charset=utf-8",encoding,location,cache,disposition;std::vector<uint8_t> body;};
@@ -75,7 +76,25 @@ bool normalizePortal(String&u){u.trim();while(u.endsWith("/"))u.remove(u.length(
 void setState(const String&name,const String&err=""){if(!take())return;st.state=name;st.lastError=err;st.configured=!cfg.portalUrl.isEmpty();st.deviceId=remoteDefaultDeviceId();give();}
 void load(){Preferences p;if(!p.begin(NVS_NS,false)){cfg={};token=newToken();return;}cfg.portalUrl=p.getString(NVS_URL,"");normalizePortal(cfg.portalUrl);token=p.getString(NVS_TOKEN,"");if(!validToken(token)){token=newToken();p.putString(NVS_TOKEN,token);}p.remove("device");p.remove("ca");p.remove("heartbeat");p.remove("admin");p.remove("enabled");p.end();}
 
-String b64enc(const uint8_t*d,size_t n){if(!d||!n)return String();size_t cap=4*((n+2)/3)+1,w=0;std::vector<unsigned char>b(cap);if(mbedtls_base64_encode(b.data(),b.size(),&w,d,n)!=0)return String();String s;s.reserve(w+1);s.concat((const char*)b.data(),w);return s;}
+size_t b64EncodedLength(size_t n){return ((n+2U)/3U)*4U;}
+bool appendB64(String&out,const uint8_t*d,size_t n){
+  if(!n)return true;
+  if(!d)return false;
+  const size_t expected=out.length()+b64EncodedLength(n);
+  char q[4];size_t i=0;
+  while(i+2U<n){
+    const uint32_t v=(uint32_t(d[i])<<16)|(uint32_t(d[i+1])<<8)|uint32_t(d[i+2]);
+    q[0]=B64_TABLE[(v>>18)&0x3f];q[1]=B64_TABLE[(v>>12)&0x3f];q[2]=B64_TABLE[(v>>6)&0x3f];q[3]=B64_TABLE[v&0x3f];
+    if(!out.concat(q,4))return false;i+=3U;
+  }
+  if(i<n){
+    uint32_t v=uint32_t(d[i])<<16;const bool haveSecond=i+1U<n;
+    if(haveSecond)v|=uint32_t(d[i+1])<<8;
+    q[0]=B64_TABLE[(v>>18)&0x3f];q[1]=B64_TABLE[(v>>12)&0x3f];q[2]=haveSecond?B64_TABLE[(v>>6)&0x3f]:'=';q[3]='=';
+    if(!out.concat(q,4))return false;
+  }
+  return out.length()==expected;
+}
 bool b64dec(const String&s,std::vector<uint8_t>&out){out.clear();if(s.isEmpty())return true;size_t cap=s.length()*3/4+4,w=0;if(cap>MAX_REQ+4)return false;out.resize(cap);if(mbedtls_base64_decode(out.data(),out.size(),&w,(const unsigned char*)s.c_str(),s.length())!=0||w>MAX_REQ){out.clear();return false;}out.resize(w);return true;}
 
 String hdr(const JsonObjectConst&h,const char*wanted){if(h.isNull())return String();String target=wanted;target.toLowerCase();for(JsonPairConst kv:h){String k=kv.key().c_str();k.toLowerCase();if(k==target){String v=kv.value().as<String>();v.replace("\r","");v.replace("\n","");if(v.length()>256)v.remove(256);return v;}}return String();}
@@ -129,11 +148,9 @@ bool localHttp(String method,const String&path,const String&contentType,const St
 }
 
 void sendResp(const String&id,const LocalResp&r){
-  const String b=b64enc(r.body.data(),r.body.size());
-
-  // Serialize the headers with ArduinoJson instead of hand-building nested JSON.
-  // This also removes the StringSumHelper chain that could generate a malformed
-  // frame on some ESP32 Arduino builds when the response body is large.
+  // Keep only one large outbound allocation: the final JSON frame. The gzip
+  // body already lives in LocalResp; Base64 is appended directly into the
+  // preallocated String instead of creating a temporary vector + String copy.
   JsonDocument hd;
   hd["content-type"]=r.type;
   if(!r.encoding.isEmpty())hd["content-encoding"]=r.encoding;
@@ -142,24 +159,43 @@ void sendResp(const String&id,const LocalResp&r){
   if(!r.disposition.isEmpty())hd["content-disposition"]=r.disposition;
   String headersJson;
   serializeJson(hd,headersJson);
+  const String escapedId=esc(id);
 
   String o;
-  o.reserve(b.length()+headersJson.length()+180);
+  if(!o.reserve(headersJson.length()+escapedId.length()+192U)){
+    if(take()){st.lastError="Memoria insufficiente per risposta remota";give();}
+    return;
+  }
   o += F("{\"type\":\"http_response\",\"id\":\"");
-  o += esc(id);
+  o += escapedId;
   o += F("\",\"status\":");
   o += String(r.code);
   o += F(",\"headers\":");
   o += headersJson;
   o += F(",\"body_b64\":\"");
-  o += b;
-  o += F("\"}");
 
-  if(o.length()>MAX_WS){
+  const size_t encodedLen=b64EncodedLength(r.body.size());
+  const size_t finalLen=o.length()+encodedLen+2U; // closing quote + object brace
+  if(finalLen>MAX_WS){
     if(take()){st.lastError="Risposta remota oltre limite WebSocket";give();}
     return;
   }
-  if(ws.sendTXT(o)&&take()){st.responses++;st.lastActivityMs=millis();give();}
+  if(!o.reserve(finalLen+1U)){
+    if(take()){st.lastError="Memoria insufficiente per frame WebSocket";give();}
+    return;
+  }
+  const size_t bodyStart=o.length();
+  if(!appendB64(o,r.body.data(),r.body.size())||o.length()!=bodyStart+encodedLen){
+    if(take()){st.lastError="Codifica Base64 risposta remota incompleta";give();}
+    return;
+  }
+  o += F("\"}");
+  if(o.length()!=finalLen){
+    if(take()){st.lastError="Frame risposta remota incompleto";give();}
+    return;
+  }
+
+  if(ws.sendTXT(o)&&take()){st.responses++;st.lastActivityMs=millis();st.lastError="";give();}
 }
 void sendErr(const String&id,int code,const String&msg){LocalResp r;r.code=code;r.body.assign(msg.c_str(),msg.c_str()+msg.length());sendResp(id,r);}
 

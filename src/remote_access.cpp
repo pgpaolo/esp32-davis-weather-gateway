@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "config.h"
+#include "firmware_update.h"
 #include "network_manager.h"
 #include "remote_trust.h"
 #include "runtime_config.h"
@@ -31,6 +32,7 @@ constexpr time_t TLS_EPOCH=1700000000;
 // more aggressive: the HTTP proxy is decoupled instead.
 constexpr uint32_t RETRY_PENDING=30000UL, RETRY_ERROR=15000UL, RETRY_APPROVED=60000UL;
 constexpr size_t MAX_REQ=12288U, MAX_RESP=24576U, MAX_WS=38000U;
+constexpr size_t MAX_FW_CHUNK=8192U;
 constexpr UBaseType_t HTTP_QUEUE_LEN=4;
 constexpr char B64_TABLE[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -96,6 +98,7 @@ bool appendB64(String&out,const uint8_t*d,size_t n){
   return out.length()==expected;
 }
 bool b64dec(const String&s,std::vector<uint8_t>&out){out.clear();if(s.isEmpty())return true;size_t cap=s.length()*3/4+4,w=0;if(cap>MAX_REQ+4)return false;out.resize(cap);if(mbedtls_base64_decode(out.data(),out.size(),&w,(const unsigned char*)s.c_str(),s.length())!=0||w>MAX_REQ){out.clear();return false;}out.resize(w);return true;}
+bool b64decFirmware(const char*s,size_t n,std::vector<uint8_t>&out){out.clear();if(!s||!n)return false;const size_t cap=n*3/4+4;if(cap>MAX_FW_CHUNK+4)return false;size_t w=0;out.resize(cap);if(mbedtls_base64_decode(out.data(),out.size(),&w,(const unsigned char*)s,n)!=0||w==0||w>MAX_FW_CHUNK){out.clear();return false;}out.resize(w);return true;}
 
 String hdr(const JsonObjectConst&h,const char*wanted){if(h.isNull())return String();String target=wanted;target.toLowerCase();for(JsonPairConst kv:h){String k=kv.key().c_str();k.toLowerCase();if(k==target){String v=kv.value().as<String>();v.replace("\r","");v.replace("\n","");if(v.length()>256)v.remove(256);return v;}}return String();}
 bool safePath(const String&p){return !p.isEmpty()&&p.length()<768&&p[0]=='/'&&p.indexOf("\r")<0&&p.indexOf("\n")<0&&p.indexOf("://")<0;}
@@ -175,7 +178,7 @@ void sendResp(const String&id,const LocalResp&r){
   o += F(",\"body_b64\":\"");
 
   const size_t encodedLen=b64EncodedLength(r.body.size());
-  const size_t finalLen=o.length()+encodedLen+2U; // closing quote + object brace
+  const size_t finalLen=o.length()+encodedLen+2U;
   if(finalLen>MAX_WS){
     if(take()){st.lastError="Risposta remota oltre limite WebSocket";give();}
     return;
@@ -198,6 +201,16 @@ void sendResp(const String&id,const LocalResp&r){
   if(ws.sendTXT(o)&&take()){st.responses++;st.lastActivityMs=millis();st.lastError="";give();}
 }
 void sendErr(const String&id,int code,const String&msg){LocalResp r;r.code=code;r.body.assign(msg.c_str(),msg.c_str()+msg.length());sendResp(id,r);}
+
+void sendFirmwareReply(const String&id,const char*stage,bool ok,const String&message,uint32_t sequence=UINT32_MAX){
+  const String status=firmwareUpdateStatusJson();
+  String o;o.reserve(message.length()+status.length()+220U);
+  o="{\"type\":\"firmware_response\",\"id\":\""+esc(id)+"\",\"stage\":\""+String(stage)+"\",\"ok\":"+(ok?String("true"):String("false"));
+  if(sequence!=UINT32_MAX)o+=",\"sequence\":"+String(sequence);
+  if(!message.isEmpty())o+=",\"message\":\""+esc(message)+"\"";
+  o+=",\"status\":"+status+"}";
+  if(o.length()<=MAX_WS)ws.sendTXT(o);
+}
 
 void clearQueuedRequests(){
   if(requestQueue){RemoteReq*q=nullptr;while(xQueueReceive(requestQueue,&q,0)==pdTRUE){delete q;}}
@@ -224,6 +237,7 @@ void httpWorker(void*){
 }
 
 void queueHttpRequest(const JsonDocument&d,const String&id,uint32_t session){
+  if(firmwareUpdateInProgress()){sendErr(id,423,"OTA firmware in corso");return;}
   if(!requestQueue){sendErr(id,503,"Worker HTTP remoto non disponibile");return;}
   RemoteReq*q=new(std::nothrow)RemoteReq();
   if(!q){sendErr(id,503,"Memoria insufficiente per richiesta remota");return;}
@@ -245,14 +259,53 @@ void drainReplies(){
   }
 }
 
+void handleFirmwareMessage(const JsonDocument&d,const String&type,const String&id){
+  if(id.isEmpty())return;
+  if(type=="firmware_begin"){
+    const size_t imageSize=d["size"]|0U;
+    const String sha=d["sha256"]|"";
+    String err;
+    const bool ok=firmwareRemoteBegin(imageSize,sha,err);
+    sendFirmwareReply(id,"begin",ok,ok?String("OTA remota avviata"):err);
+    return;
+  }
+  if(type=="firmware_chunk"){
+    const uint32_t sequence=d["sequence"]|UINT32_MAX;
+    const char *dataB64=d["data_b64"].as<const char*>();
+    const size_t dataLen=dataB64?strlen(dataB64):0U;
+    std::vector<uint8_t> chunk;
+    if(sequence==UINT32_MAX||!b64decFirmware(dataB64,dataLen,chunk)){
+      firmwareRemoteAbort("Blocco firmware remoto non valido");
+      sendFirmwareReply(id,"chunk",false,"Blocco firmware remoto non valido",sequence);
+      return;
+    }
+    String err;
+    const bool ok=firmwareRemoteWrite(sequence,chunk.data(),chunk.size(),err);
+    sendFirmwareReply(id,"chunk",ok,ok?String():err,sequence);
+    return;
+  }
+  if(type=="firmware_end"){
+    String err;
+    const bool ok=firmwareRemoteEnd(err);
+    sendFirmwareReply(id,"end",ok,ok?String("Firmware verificato; riavvio programmato"):err);
+    return;
+  }
+  if(type=="firmware_abort"){
+    String reason=d["reason"]|"Aggiornamento remoto annullato dal portale";
+    firmwareRemoteAbort(reason);
+    sendFirmwareReply(id,"abort",true,reason);
+  }
+}
+
 void wsText(uint8_t*p,size_t n){
   if(!p||!n||n>MAX_WS)return;JsonDocument d;if(deserializeJson(d,p,n))return;
   String type=d["type"]|"",id=d["id"]|"";uint32_t session=0;
   if(take()){st.lastActivityMs=millis();session=wsSession;give();}
   if(type=="ping"){String x="{\"type\":\"pong\"";if(!id.isEmpty())x+=",\"id\":\""+esc(id)+"\"";x+="}";ws.sendTXT(x);return;}
+  if(type=="firmware_begin"||type=="firmware_chunk"||type=="firmware_end"||type=="firmware_abort"){
+    handleFirmwareMessage(d,type,id);return;
+  }
   if(type!="http_request"||id.isEmpty())return;
-  // Never execute the local HTTP transaction inside the WebSocket callback.
-  // Queue it and return immediately so ping/pong and WebSocket framing remain live.
   queueHttpRequest(d,id,session);
 }
 
@@ -261,8 +314,9 @@ void wsEvent(WStype_t t,uint8_t*p,size_t n){
     if(take()){wsSession++;st.transportActive=true;st.approved=true;st.state="ONLINE";st.wsConnects++;st.lastActivityMs=millis();st.lastWsEvent="CONNECTED";st.lastError="";give();}
     Serial.println(F("[REMOTE] AdminSensor ONLINE"));
   }else if(t==WStype_DISCONNECTED){
+    firmwareRemoteAbort("Connessione AdminSensor interrotta durante OTA");
     if(take()){bool was=st.transportActive;wsSession++;st.transportActive=false;if(st.configured&&st.approved)st.state="RECONNECT";if(was)st.wsDisconnects++;st.lastWsEvent="DISCONNECTED";give();}
-  }else if(t==WStype_ERROR){if(take()){st.lastWsEvent="ERROR";give();}}
+  }else if(t==WStype_ERROR){firmwareRemoteAbort("Errore WebSocket AdminSensor durante OTA");if(take()){st.lastWsEvent="ERROR";give();}}
   else if(t==WStype_TEXT)wsText(p,n);
   else if(t==WStype_PING||t==WStype_PONG){if(take()){st.lastActivityMs=millis();st.lastWsEvent=t==WStype_PING?"WS_PING":"WS_PONG";give();}}
 }
@@ -286,7 +340,6 @@ bool enroll(const String&portal,String&wsUrl,bool&pending){
 
 bool startWs(const String&url){
   UrlParts u;if(!parseUrl(url,"wss",u))return false;
-  // Keep the exact transport setup order used by the stable develop branch.
   ws.disconnect();ws.beginSslWithCA(u.host.c_str(),u.port,u.path.c_str(),REMOTE_TRUST_CA,"");
   wsAuth="Authorization: Bearer "+token;ws.setExtraHeaders(wsAuth.c_str());ws.setReconnectInterval(5000);ws.enableHeartbeat(30000,5000,2);
   activeWsUrl=url;wsStarted=true;
@@ -299,9 +352,9 @@ void task(void*){
   for(;;){
     RemoteAccessConfig c;if(take()){c=cfg;give();}
     uint32_t g=generation;bool fr=forceRetry;if(fr)forceRetry=false;
-    if(g!=seen||fr){seen=g;if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;clearQueuedRequests();if(take()){wsSession++;st.transportActive=false;st.approved=false;st.lastWsEvent=fr?"MANUAL_RETRY":"CONFIG_CHANGED";give();}}
+    if(g!=seen||fr){firmwareRemoteAbort(fr?"Retry AdminSensor durante OTA":"Configurazione AdminSensor modificata durante OTA");seen=g;if(wsStarted)ws.disconnect();wsStarted=false;activeWsUrl="";next=0;clearQueuedRequests();if(take()){wsSession++;st.transportActive=false;st.approved=false;st.lastWsEvent=fr?"MANUAL_RETRY":"CONFIG_CHANGED";give();}}
     if(c.portalUrl.isEmpty()){setState("OFF");vTaskDelay(pdMS_TO_TICKS(300));continue;}
-    if(!networkConnected()||networkProvisioningActive()){if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}
+    if(!networkConnected()||networkProvisioningActive()){firmwareRemoteAbort("Rete non disponibile durante OTA remota");if(wsStarted){ws.disconnect();wsStarted=false;}setState("WAIT_NETWORK");vTaskDelay(pdMS_TO_TICKS(500));continue;}
     if(time(nullptr)<TLS_EPOCH){setState("WAIT_TIME");vTaskDelay(pdMS_TO_TICKS(500));continue;}
     uint32_t now=millis();bool online=false;if(take()){online=st.transportActive;give();}
     if(next==0||(!online&&(int32_t)(now-next)>=0)){
